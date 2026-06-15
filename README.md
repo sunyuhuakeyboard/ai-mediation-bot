@@ -111,6 +111,26 @@ cp .env.example .env          # 填入 LLM_API_KEY（豆包/Qwen/DeepSeek 任一
 docker compose up -d --build
 ```
 
+### 前端控制台
+
+服务启动后直接访问：
+
+```text
+http://服务器IP:8000/console/
+```
+
+控制台随 FastAPI 一起部署，无需 Node/npm 构建。可在页面内完成健康检查、发起测试通话、
+发送单轮用户文本、查看通话状态/转写/质检、查询和导入案件、查看/热更新知识库、
+维护 DNC 谢绝名单，以及读取 Prometheus 指标。
+
+调试入口：
+
+```text
+http://服务器IP:8000/docs      # OpenAPI 文档
+http://服务器IP:8000/healthz   # 服务健康
+http://服务器IP:8000/metrics   # Prometheus 指标
+```
+
 启动时自动建表；知识表为空会自动灌入内置种子（Excel镜像），也可手动：
 
 ```bash
@@ -180,6 +200,7 @@ app/
 │   ├── call_state.py         # Redis会话状态
 │   └── orchestrator.py       # 主编排：路由→动作→链式衔接→合规→状态
 ├── services/  call_service.py quality_service.py
+├── static/    console/       # 后端内置前端控制台（/console/）
 └── api/v1/    dialog.py calls.py cases.py admin.py
 scripts/   seed_db.py import_knowledge_xlsx.py
 tests/     test_dialog_flow.py

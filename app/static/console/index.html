@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI调解控制台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">AI</span>
+        <div>
+          <h1>AI调解控制台</h1>
+          <p id="runtimeLine">连接中</p>
+        </div>
+      </div>
+      <div class="top-actions">
+        <label class="api-base">
+          <span>API</span>
+          <input id="apiBase" autocomplete="off" />
+        </label>
+        <a class="icon-link" href="/docs" target="_blank" rel="noreferrer" title="接口文档">Docs</a>
+        <a class="icon-link" href="/redoc" target="_blank" rel="noreferrer" title="Redoc">Redoc</a>
+        <button id="refreshAll" class="primary-btn" type="button">刷新</button>
+      </div>
+    </header>
+
+    <div class="layout">
+      <nav class="sidebar" aria-label="控制台导航">
+        <button class="nav-item active" type="button" data-tab="dialog">对话测试</button>
+        <button class="nav-item" type="button" data-tab="cases">案件</button>
+        <button class="nav-item" type="button" data-tab="calls">通话</button>
+        <button class="nav-item" type="button" data-tab="knowledge">知识库</button>
+        <button class="nav-item" type="button" data-tab="dnc">DNC</button>
+        <button class="nav-item" type="button" data-tab="metrics">指标</button>
+      </nav>
+
+      <main class="workspace">
+        <section class="overview-band">
+          <div class="stat-tile">
+            <span>服务</span>
+            <strong id="healthStatus">-</strong>
+          </div>
+          <div class="stat-tile">
+            <span>知识版本</span>
+            <strong id="knowledgeVersion">-</strong>
+          </div>
+          <div class="stat-tile">
+            <span>模式</span>
+            <strong id="runtimeMode">-</strong>
+          </div>
+          <div class="stat-tile">
+            <span>当前通话</span>
+            <strong id="activeCall">-</strong>
+          </div>
+        </section>
+
+        <section class="panel active" data-panel="dialog">
+          <div class="split-grid">
+            <div class="surface">
+              <div class="section-head">
+                <h2>发起通话</h2>
+                <button id="useDemoCase" type="button" class="ghost-btn">演示案件</button>
+              </div>
+              <form id="startForm" class="form-grid">
+                <label>
+                  <span>案件编号</span>
+                  <input id="caseId" value="CASE20260610001" autocomplete="off" />
+                </label>
+                <label>
+                  <span>指定 call_id</span>
+                  <input id="customCallId" placeholder="留空自动生成" autocomplete="off" />
+                </label>
+                <label class="check-row">
+                  <input id="forceStart" type="checkbox" checked />
+                  <span>跳过外呼策略</span>
+                </label>
+                <label class="wide">
+                  <span>内联案件 JSON</span>
+                  <textarea id="inlineCase" rows="8" spellcheck="false"></textarea>
+                </label>
+                <button class="primary-btn wide" type="submit">开始通话</button>
+              </form>
+            </div>
+
+            <div class="surface">
+              <div class="section-head">
+                <h2>单轮对话</h2>
+                <div class="inline-actions">
+                  <button id="loadState" type="button" class="ghost-btn">状态</button>
+                  <button id="endCall" type="button" class="danger-btn">结束</button>
+                </div>
+              </div>
+              <form id="turnForm" class="form-grid">
+                <label>
+                  <span>call_id</span>
+                  <input id="callIdInput" autocomplete="off" />
+                </label>
+                <label>
+                  <span>结束结果</span>
+                  <input id="endResult" value="测试结束" autocomplete="off" />
+                </label>
+                <label class="wide">
+                  <span>用户文本</span>
+                  <textarea id="userText" rows="4" spellcheck="false">是我，什么事</textarea>
+                </label>
+                <button class="primary-btn wide" type="submit">发送</button>
+              </form>
+            </div>
+          </div>
+
+          <div class="dialog-grid">
+            <section class="surface transcript">
+              <div class="section-head">
+                <h2>对话流</h2>
+                <button id="clearTimeline" type="button" class="ghost-btn">清空</button>
+              </div>
+              <div id="timeline" class="timeline"></div>
+            </section>
+            <section class="surface">
+              <div class="section-head">
+                <h2>最近响应</h2>
+                <span id="lastLatency" class="subtle-pill">-</span>
+              </div>
+              <pre id="lastResponse" class="json-box">{}</pre>
+            </section>
+          </div>
+        </section>
+
+        <section class="panel" data-panel="cases">
+          <div class="split-grid">
+            <div class="surface">
+              <div class="section-head">
+                <h2>查询案件</h2>
+              </div>
+              <form id="caseLookupForm" class="form-grid">
+                <label>
+                  <span>案件编号</span>
+                  <input id="lookupCaseId" value="CASE20260610001" autocomplete="off" />
+                </label>
+                <button class="primary-btn" type="submit">查询</button>
+              </form>
+              <pre id="caseOutput" class="json-box">{}</pre>
+            </div>
+            <div class="surface">
+              <div class="section-head">
+                <h2>导入案件</h2>
+              </div>
+              <form id="caseImportForm" class="form-grid">
+                <label class="wide">
+                  <span>请求 JSON</span>
+                  <textarea id="caseImportJson" rows="14" spellcheck="false"></textarea>
+                </label>
+                <button class="primary-btn wide" type="submit">导入</button>
+              </form>
+              <pre id="caseImportOutput" class="json-box compact">{}</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" data-panel="calls">
+          <div class="split-grid">
+            <div class="surface">
+              <div class="section-head">
+                <h2>通话查询</h2>
+                <button id="copyActiveCall" type="button" class="ghost-btn">使用当前</button>
+              </div>
+              <form id="callQueryForm" class="form-grid">
+                <label>
+                  <span>call_id</span>
+                  <input id="queryCallId" autocomplete="off" />
+                </label>
+                <div class="button-row">
+                  <button class="primary-btn" type="submit" data-kind="transcript">转写</button>
+                  <button class="ghost-btn" type="submit" data-kind="quality">质检</button>
+                  <button class="ghost-btn" type="submit" data-kind="state">状态</button>
+                </div>
+              </form>
+            </div>
+            <div class="surface">
+              <div class="section-head">
+                <h2>结果</h2>
+              </div>
+              <pre id="callQueryOutput" class="json-box tall">{}</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" data-panel="knowledge">
+          <div class="split-grid">
+            <div class="surface">
+              <div class="section-head">
+                <h2>快照</h2>
+                <button id="reloadKnowledge" type="button" class="primary-btn">热更新</button>
+              </div>
+              <form id="knowledgeViewForm" class="form-grid">
+                <label>
+                  <span>表</span>
+                  <select id="knowledgeTable">
+                    <option value="routes">routes</option>
+                    <option value="nodes">nodes</option>
+                    <option value="labels">labels</option>
+                    <option value="templates">templates</option>
+                    <option value="strategies">strategies</option>
+                    <option value="components">components</option>
+                    <option value="compliance">compliance</option>
+                    <option value="qc">qc</option>
+                  </select>
+                </label>
+                <button class="primary-btn" type="submit">查看</button>
+              </form>
+              <pre id="knowledgeOutput" class="json-box tall">{}</pre>
+            </div>
+            <div class="surface">
+              <div class="section-head">
+                <h2>维护</h2>
+              </div>
+              <form id="knowledgeUpdateForm" class="form-grid">
+                <label>
+                  <span>表</span>
+                  <select id="updateTable">
+                    <option value="templates">templates</option>
+                    <option value="routes">routes</option>
+                    <option value="strategies">strategies</option>
+                    <option value="labels">labels</option>
+                    <option value="nodes">nodes</option>
+                  </select>
+                </label>
+                <label>
+                  <span>主键</span>
+                  <input id="updatePk" placeholder="如 TPL_NO_MONEY_001" autocomplete="off" />
+                </label>
+                <label class="wide">
+                  <span>字段 JSON</span>
+                  <textarea id="knowledgePayload" rows="12" spellcheck="false">{}</textarea>
+                </label>
+                <button class="primary-btn wide" type="submit">保存</button>
+              </form>
+              <pre id="knowledgeUpdateOutput" class="json-box compact">{}</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" data-panel="dnc">
+          <div class="split-grid">
+            <div class="surface">
+              <div class="section-head">
+                <h2>谢绝名单</h2>
+                <button id="refreshDnc" type="button" class="ghost-btn">刷新</button>
+              </div>
+              <form id="dncForm" class="form-grid">
+                <label>
+                  <span>手机号</span>
+                  <input id="dncPhone" autocomplete="off" />
+                </label>
+                <div class="button-row">
+                  <button class="primary-btn" type="submit" data-action="add">加入</button>
+                  <button class="danger-btn" type="submit" data-action="remove">移除</button>
+                </div>
+              </form>
+            </div>
+            <div class="surface">
+              <div class="section-head">
+                <h2>列表</h2>
+              </div>
+              <pre id="dncOutput" class="json-box tall">[]</pre>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" data-panel="metrics">
+          <div class="surface">
+            <div class="section-head">
+              <h2>Prometheus</h2>
+              <div class="inline-actions">
+                <a class="icon-link" href="/metrics" target="_blank" rel="noreferrer">打开</a>
+                <button id="loadMetrics" type="button" class="primary-btn">加载</button>
+              </div>
+            </div>
+            <pre id="metricsOutput" class="json-box metrics-box"># metrics</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>

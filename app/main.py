@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Response
-from fastapi.responses import ORJSONResponse
+from fastapi.responses import ORJSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from app.api.v1 import admin, calls, cases, dialog
@@ -29,6 +31,7 @@ from app.services.quality_service import QualityService
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("app")
+CONSOLE_DIR = Path(__file__).resolve().parent / "static" / "console"
 
 
 async def _ensure_seeded(session_factory) -> None:
@@ -140,6 +143,16 @@ def create_app() -> FastAPI:
     @app.get("/metrics")
     async def metrics_endpoint():
         return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    @app.get("/", include_in_schema=False)
+    async def root_redirect():
+        return RedirectResponse(url="/console/")
+
+    @app.get("/console", include_in_schema=False)
+    async def console_redirect():
+        return RedirectResponse(url="/console/")
+
+    app.mount("/console", StaticFiles(directory=CONSOLE_DIR, html=True), name="console")
 
     return app
 
