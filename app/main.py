@@ -17,7 +17,7 @@ from fastapi.responses import ORJSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
-from app.api.v1 import admin, calls, cases, dialog
+from app.api.v1 import admin, calls, cases, dialog, okcti
 from app.cache.knowledge_cache import KnowledgeCache
 from app.config import get_settings
 from app.engines.call_state import StateStore
@@ -134,6 +134,8 @@ def create_app() -> FastAPI:
     app.include_router(calls.router, prefix=api_prefix)
     app.include_router(cases.router, prefix=api_prefix)
     app.include_router(admin.router, prefix=api_prefix)
+    app.include_router(okcti.router, prefix=api_prefix)
+    app.include_router(okcti.router)
 
     @app.get("/healthz")
     async def healthz():

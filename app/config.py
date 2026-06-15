@@ -60,6 +60,23 @@ class Settings(BaseSettings):
     llm_audit_enabled: bool = False
     llm_audit_max_lines: int = 20
 
+    # ---- OKCTI / LLM-IVR SSE 对接 ----
+    okcti_auth_enabled: bool = False
+    okcti_app_id: str = ""
+    okcti_app_secret: str = ""
+    okcti_response_charset: str = "UTF-8"
+    okcti_force_start: bool = True          # CTI平台通常已完成外呼策略控制；联调默认不二次拦截
+    okcti_wait_enabled: bool = True
+    okcti_wait_message: str = "请稍后"
+    okcti_transfer_skill: str = "人工坐席"
+    okcti_tts_spk_name: str = ""
+    okcti_msg_chunk_chars: int = 80
+    okcti_voice_allow_stop: int = 1
+    okcti_voice_block_time: int = 0
+    okcti_voice_timeout: int = 0
+    okcti_voice_min_speak: int = 0
+    okcti_voice_min_pause: int = 0
+
     # ---- 质检 ----
     latency_warn_ms: int = 1800                   # QC010: P95 响应阈值
 

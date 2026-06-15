@@ -22,6 +22,32 @@ const demoImport = {
   ],
 };
 
+function okctiSample(type) {
+  const callid = state.callId || `OKCTI${Date.now()}`;
+  const base = {
+    callid,
+    caller: "95000000",
+    callee: "13900000000",
+    direct: 1,
+    type,
+    usrtype: type === "QA" ? 2 : 0,
+    usrcontent: type === "QA" ? "是我，什么事" : "",
+    usrrecurl: "",
+    fsx: 1,
+    ch: 1,
+    sysid: 1,
+    taskid: "TASK_DEMO",
+    calltaskid: "CASE20260610001",
+    oricaller: "",
+    video: false,
+  };
+  if (type === "END") {
+    base.talktimelong = 60;
+    base.callresult = 1;
+  }
+  return base;
+}
+
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
@@ -271,6 +297,16 @@ async function loadMetrics() {
   toast("指标已加载");
 }
 
+async function postOkcti(event) {
+  event.preventDefault();
+  const body = parseJsonInput($("#okctiJson").value, null);
+  if (!body) throw new Error("缺少 OKCTI 请求 JSON");
+  const data = await api("/ivr/okcti/welcome", { method: "POST", body });
+  setText("#okctiOutput", data);
+  if (body.callid) updateCallId(body.callid);
+  toast("OKCTI SSE 已返回");
+}
+
 function switchTab(name) {
   $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.tab === name));
   $$(".panel").forEach((panel) => panel.classList.toggle("active", panel.dataset.panel === name));
@@ -296,6 +332,7 @@ function init() {
   $("#queryCallId").value = state.callId;
   setText("#activeCall", state.callId || "-");
   $("#caseImportJson").value = pretty(demoImport);
+  $("#okctiJson").value = pretty(okctiSample("START"));
 
   $$(".nav-item").forEach((item) => item.addEventListener("click", () => switchTab(item.dataset.tab)));
   $("#apiBase").addEventListener("change", () => {
@@ -316,6 +353,15 @@ function init() {
   $("#copyActiveCall").addEventListener("click", () => {
     $("#queryCallId").value = state.callId || $("#callIdInput").value.trim();
   });
+  $("#okctiStartSample").addEventListener("click", () => {
+    $("#okctiJson").value = pretty(okctiSample("START"));
+  });
+  $("#okctiQaSample").addEventListener("click", () => {
+    $("#okctiJson").value = pretty(okctiSample("QA"));
+  });
+  $("#okctiEndSample").addEventListener("click", () => {
+    $("#okctiJson").value = pretty(okctiSample("END"));
+  });
 
   bindSafe("#refreshAll", "click", refreshOverview);
   bindSafe("#startForm", "submit", startCall);
@@ -331,6 +377,7 @@ function init() {
   bindSafe("#refreshDnc", "click", refreshDnc);
   bindSafe("#dncForm", "submit", submitDnc);
   bindSafe("#loadMetrics", "click", loadMetrics);
+  bindSafe("#okctiForm", "submit", postOkcti);
 
   refreshOverview();
 }

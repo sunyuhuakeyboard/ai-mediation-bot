@@ -121,7 +121,7 @@ http://服务器IP:8000/console/
 
 控制台随 FastAPI 一起部署，无需 Node/npm 构建。可在页面内完成健康检查、发起测试通话、
 发送单轮用户文本、查看通话状态/转写/质检、查询和导入案件、查看/热更新知识库、
-维护 DNC 谢绝名单，以及读取 Prometheus 指标。
+维护 DNC 谢绝名单、OKCTI SSE 接口联调，以及读取 Prometheus 指标。
 
 调试入口：
 
@@ -139,10 +139,127 @@ python scripts/import_knowledge_xlsx.py 模板.xlsx       # 从业务Excel导入
 curl -X POST localhost:8000/api/v1/admin/knowledge/reload   # 秒级热生效
 ```
 
+### OKCTI / LLM-IVR SSE 外呼平台对接
+
+给 OKCTI 配置业务平台 URL：
+
+```text
+http://服务器IP:8000/ivr/okcti/welcome
+```
+
+同一个接口也提供版本化调试路径：
+
+```text
+http://服务器IP:8000/api/v1/ivr/okcti/welcome
+```
+
+接口协议：
+
+- 请求：`POST` JSON，字段兼容 OKCTI 文档中的 `callid/caller/callee/direct/type/usrtype/usrcontent/...`
+- 响应：`text/event-stream; charset=UTF-8`
+- 事件：`wait`、`ivr`、`msg`
+- 每个完整消息以 `[E-N=D]` 结尾
+
+最小 START 请求：
+
+```bash
+curl -N -X POST localhost:8000/ivr/okcti/welcome \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "callid":"OKCTI_TEST_001",
+    "caller":"95000000",
+    "callee":"13900000000",
+    "direct":1,
+    "type":"START",
+    "usrtype":0,
+    "usrcontent":"",
+    "sysid":1,
+    "taskid":"TASK_DEMO",
+    "calltaskid":"CASE20260610001",
+    "video":false
+  }'
+```
+
+用户说话后的 QA 请求：
+
+```bash
+curl -N -X POST localhost:8000/ivr/okcti/welcome \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "callid":"OKCTI_TEST_001",
+    "caller":"95000000",
+    "callee":"13900000000",
+    "direct":1,
+    "type":"QA",
+    "usrtype":2,
+    "usrcontent":"是我，什么事",
+    "sysid":1,
+    "taskid":"TASK_DEMO",
+    "calltaskid":"CASE20260610001",
+    "video":false
+  }'
+```
+
+结束通话：
+
+```bash
+curl -N -X POST localhost:8000/ivr/okcti/welcome \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "callid":"OKCTI_TEST_001",
+    "caller":"95000000",
+    "callee":"13900000000",
+    "direct":1,
+    "type":"END",
+    "usrtype":0,
+    "usrcontent":"",
+    "sysid":1,
+    "talktimelong":60,
+    "callresult":1,
+    "video":false
+  }'
+```
+
+推荐生产配置：
+
+```env
+OKCTI_AUTH_ENABLED=1
+OKCTI_APP_ID=双方约定AppId
+OKCTI_APP_SECRET=双方约定密码
+OKCTI_RESPONSE_CHARSET=UTF-8
+OKCTI_FORCE_START=1
+OKCTI_TRANSFER_SKILL=人工坐席
+```
+
+如果需要同时保存 OKCTI 公司、分机和 WebRTC SDK 配置，可写入服务器 `.env`：
+
+```env
+CTI_COMPANY_ID=56
+CTI_EXTENSION_90001_NUMBER=1083
+CTI_EXTENSION_90001_PASSWORD=******
+CTI_EXTENSION_90002_NUMBER=1084
+CTI_EXTENSION_90002_PASSWORD=******
+VITE_WS_CTI_URL=wss://v8.iokcall.com/cti
+VITE_APP_WEBRTC=true
+VITE_APP_WEBRTC_SIP=117.29.161.214
+VITE_APP_WEBRTC_PORT=31091
+VITE_APP_WEBRTC_WSS=wss://v8ljx.iokcall.com:31743
+VITE_APP_WEBRTC_DEBUG=false
+VITE_APP_WEBRTC_STUN=
+```
+
+`.env` 已被 `.gitignore` 忽略，分机密码、LLM Key、OKCTI Secret 等生产密钥不要提交到仓库。
+
+签名规则按 OKCTI 文档：`MD5(App ID;时间戳;密码;请求ID)`，请求头为
+`X-request-Id`、`X-App-Id`、`X-Timestamp`、`X-Sign`。
+
+案件绑定建议：外呼平台在请求体中传 `calltaskid` 或 `case_id` 对应本系统案件编号；
+如果没有传，本服务会用 `callid` 和主被叫号码生成最小案件，便于真实电话冒烟测试。
+
 ### 运行测试
 
 ```bash
-python -m pytest tests/ -v        # 11个端到端用例，离线运行
+python -m pytest tests/ -v        # 端到端用例，离线运行
 ```
 
 ## 四、接口一览（/api/v1）
@@ -158,6 +275,8 @@ python -m pytest tests/ -v        # 11个端到端用例，离线运行
 | `GET /admin/knowledge/{table}` | 查看快照中的节点/标签/路由/话术/策略/合规/质检 |
 | `PUT /admin/knowledge/{table}/{pk}` | 单条维护（话术/路由/策略/标签/节点） |
 | `POST /admin/knowledge/reload` | 重建快照并广播全副本 |
+| `POST /ivr/okcti/welcome` | OKCTI LLM-IVR SSE 兼容入口（root路径） |
+| `POST /api/v1/ivr/okcti/welcome` | OKCTI LLM-IVR SSE 兼容入口（版本化路径） |
 
 WebSocket 协议示例：
 

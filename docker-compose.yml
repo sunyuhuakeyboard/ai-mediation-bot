@@ -23,6 +23,8 @@ services:
 
   app:
     build: .
+    env_file:
+      - .env
     environment:
       PG_DSN: postgresql+asyncpg://mediation:mediation@postgres:5432/mediation
       REDIS_URL: redis://redis:6379/0
