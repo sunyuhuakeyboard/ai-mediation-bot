@@ -14,9 +14,9 @@ htmlcov/
 venv/
 env/
 
-# Local environment and secrets
-.env
+# Local environment files
 .env.*
+!.env
 !.env.example
 
 # IDE and OS files
