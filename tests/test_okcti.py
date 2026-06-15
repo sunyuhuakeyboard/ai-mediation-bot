@@ -40,7 +40,7 @@ def test_okcti_start_returns_sse_ivr():
         resp = client.post("/ivr/okcti/welcome", json=_payload("OKCTI_T1", "START"))
         assert resp.status_code == 200
         assert "text/event-stream" in resp.headers["content-type"]
-        assert "event:wait" in resp.text
+        assert "event:wait" not in resp.text
         assert "event:ivr" in resp.text
         assert "[E-N=D]" in resp.text
         assert '"callid":"OKCTI_T1"' in resp.text

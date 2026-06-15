@@ -66,8 +66,6 @@ class Settings(BaseSettings):
     okcti_app_secret: str = ""
     okcti_response_charset: str = "UTF-8"
     okcti_force_start: bool = True          # CTI平台通常已完成外呼策略控制；联调默认不二次拦截
-    okcti_wait_enabled: bool = True
-    okcti_wait_message: str = "请稍后"
     okcti_transfer_skill: str = "人工坐席"
     okcti_tts_spk_name: str = ""
     okcti_msg_chunk_chars: int = 80

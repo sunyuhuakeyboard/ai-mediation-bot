@@ -5,7 +5,6 @@ CTI 以 HTTP POST 调业务平台；本接口把 OKCTI 的 START/QA/LEAVE/END
 """
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import json
@@ -26,7 +25,6 @@ router = APIRouter(prefix="/ivr/okcti", tags=["okcti"])
 END_MARK = "[E-N=D]"
 EVENT_IVR = "ivr"
 EVENT_MSG = "msg"
-EVENT_WAIT = "wait"
 
 
 def _settings(request: Request) -> Settings:
@@ -287,12 +285,6 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
                         s: Settings) -> AsyncIterator[bytes]:
     charset = s.okcti_response_charset or "UTF-8"
     typ = req.type.upper()
-    if s.okcti_wait_enabled and typ in {"START", "QA"}:
-        yield _event_bytes(EVENT_WAIT, {
-            "callid": req.callid, "index": 0, "len": _len(s.okcti_wait_message),
-            "msg": s.okcti_wait_message, "type": 1,
-        }, charset)
-        await asyncio.sleep(0)
 
     if typ == "START":
         result = await _handle_start(req, calls, orchestrator, s)
