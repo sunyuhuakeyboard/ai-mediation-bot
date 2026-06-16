@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     okcti_tts_spk_name: str = ""
     okcti_msg_chunk_chars: int = 200    # 投递切分阈值：≤该值不分段，避免 IVR 重复播报
     okcti_silence_max_turns: int = 2    # 连续静音超过该次数即优雅结束，避免 IVR 反复自播
+    # OKCTI 上游未传 case 字段时的兜底值（生产）
+    okcti_default_mediation_org: str = "亦法云调解中心"
+    okcti_default_debtor_name: str = "张小贤"
+    okcti_default_platform_name: str = "相关平台"
+    okcti_default_creditor_name: str = "委托方"
     # IVR 语音交互参数（毫秒）：全部为 0 时各厂商默认值不一致，最常见就是 IVR 自播 cmdcontent
     # 一次形成"每句话说两遍"的听感。显式给出后由我方驱动节奏。
     okcti_voice_allow_stop: int = 1     # 允许用户语音打断

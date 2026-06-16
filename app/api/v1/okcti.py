@@ -271,7 +271,7 @@ def _customer_phone(req: OkctiRequest) -> str:
     return req.callee if req.direct == 1 and req.callee else req.caller
 
 
-async def _case_from_request(req: OkctiRequest, calls) -> dict:
+async def _case_from_request(req: OkctiRequest, calls, s: Settings) -> dict:
     explicit_case = req.extra_value("case")
     if isinstance(explicit_case, dict):
         return dict(explicit_case)
@@ -285,12 +285,13 @@ async def _case_from_request(req: OkctiRequest, calls) -> dict:
     phone = _customer_phone(req)
     return {
         "case_id": case_id or req.callid,
-        "debtor_name": req.extra_value("debtor_name") or req.extra_value("name") or "客户",
+        "debtor_name": (req.extra_value("debtor_name") or req.extra_value("name")
+                        or s.okcti_default_debtor_name),
         "debtor_gender": req.extra_value("debtor_gender") or "",
         "debtor_phone": phone,
-        "platform_name": req.extra_value("platform_name") or "相关平台",
-        "creditor_name": req.extra_value("creditor_name") or "委托方",
-        "mediation_org": req.extra_value("mediation_org") or "XX民商事调解中心",
+        "platform_name": req.extra_value("platform_name") or s.okcti_default_platform_name,
+        "creditor_name": req.extra_value("creditor_name") or s.okcti_default_creditor_name,
+        "mediation_org": req.extra_value("mediation_org") or s.okcti_default_mediation_org,
         "official_verify_channel": req.extra_value("official_verify_channel") or "官方渠道",
         "total_amount": req.extra_value("total_amount"),
         "notice_status": req.extra_value("notice_status") or "",
@@ -362,7 +363,7 @@ async def _handle_start(req: OkctiRequest, calls, orchestrator, s: Settings):
                           node_before=existing.current_node,
                           node_after=existing.current_node,
                           slots=dict(existing.slots)), existing
-    case = await _case_from_request(req, calls)
+    case = await _case_from_request(req, calls, s)
     logger.info(
         "okcti start new call=%s case_id=%s phone=%s force=%s taskid=%s calltaskid=%s logid=%s",
         req.callid, case.get("case_id"), _mask_phone(case.get("debtor_phone") or ""),
@@ -386,7 +387,7 @@ async def _handle_qa(req: OkctiRequest, calls, orchestrator, s: Settings):
             req.callid, req.usrtype, req.logid or "", len(_user_text(req)),
             _preview(_user_text(req)),
         )
-        case = await _case_from_request(req, calls)
+        case = await _case_from_request(req, calls, s)
         state = await calls.start_call(case, call_id=req.callid, force=s.okcti_force_start)
         await orchestrator.opening(state)
     logger.info(

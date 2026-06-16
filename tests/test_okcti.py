@@ -212,6 +212,55 @@ def test_okcti_silence_prompt_does_not_re_ask_node_question():
         assert state["ended"] is False
 
 
+def test_okcti_default_org_and_debtor_name_in_opening():
+    """OKCTI 不传 case 字段且无种子案件时，开场使用生产兜底值：亦法云调解中心 / 张小贤。"""
+    with _client() as client:
+        payload = _payload("OKCTI_DEF", "START")
+        payload["calltaskid"] = "CASE_NOT_SEEDED_OKCTI_DEF"  # 走 _case_from_request 兜底分支
+        resp = client.post("/ivr/okcti/welcome/stream", json=payload)
+        body = resp.text
+        assert "亦法云调解中心" in body
+        assert "请问您是张小贤本人吗" in body
+        # 不应再有占位符
+        assert "XX民商事调解中心" not in body
+        assert "请问您是客户本人吗" not in body
+
+
+def test_okcti_not_self_variants_route_to_n005():
+    """常见非本人口语表达都应触发 NOT_SELF 应答，路由到 N005。"""
+    phrases = [
+        "你打错了，不是我",
+        "我不是当事人",
+        "电话打错了",
+        "你找错人了",
+        "他不在家",
+        "号码错了",
+    ]
+    for i, phrase in enumerate(phrases):
+        with _client() as client:
+            cid = f"OKCTI_NS_{i}"
+            client.post("/ivr/okcti/welcome/stream", json=_payload(cid, "START"))
+            client.post("/ivr/okcti/welcome/stream",
+                        json=_payload(cid, "QA", phrase))
+            state = client.get(f"/api/v1/calls/{cid}/state").json()
+            assert state["current_node"] == "N005", \
+                f"{phrase!r} should route to N005, got {state['current_node']}"
+            assert state["slots"].get("not_self") is True
+
+
+def test_okcti_short_deny_at_n002_routes_to_n005():
+    """N002 上短否定（"我不是"/"不是了"）经极性映射应判为 NOT_SELF。"""
+    for phrase in ("我不是", "不是了", "不是吧"):
+        with _client() as client:
+            cid = f"OKCTI_DENY_{phrase}"
+            client.post("/ivr/okcti/welcome/stream", json=_payload(cid, "START"))
+            client.post("/ivr/okcti/welcome/stream",
+                        json=_payload(cid, "QA", phrase))
+            state = client.get(f"/api/v1/calls/{cid}/state").json()
+            assert state["current_node"] == "N005", \
+                f"{phrase!r} should route to N005, got {state['current_node']}"
+
+
 def test_okcti_end_returns_minimal_ivr_with_grade():
     with _client() as client:
         client.post("/ivr/okcti/welcome", json=_payload("OKCTI_T3", "START"))
