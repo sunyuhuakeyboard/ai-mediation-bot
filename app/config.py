@@ -33,7 +33,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.3
     llm_max_tokens: int = 60
     llm_connect_timeout_ms: int = 300
-    llm_total_timeout_ms: int = 1500              # 超时即回退参考话术模板，保障首响
+    llm_first_token_timeout_ms: int = 1500        # 首token超时：连接成功但首字符迟迟不到 → 立即兜底
+    llm_total_timeout_ms: int = 3000              # 总预算：首token到首句结束；超时仍尝试落地部分输出
     reply_max_chars: int = 48                     # 单句输出上限（约束"不超过30字"留余量）
 
     # 金额/时间复述强制走模板渲染（零幻觉），不交给LLM改写

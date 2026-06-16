@@ -34,7 +34,7 @@ class LLMClient:
                                         timeout=timeout, headers=headers)
 
     async def short_reply(self, messages: list[dict], max_chars: int | None = None) -> str | None:
-        """流式生成一句话；失败/超时返回 None（调用方回退模板）。"""
+        """流式生成一句话；失败/超时尝试落地部分输出，否则返回 None（调用方回退模板）。"""
         max_chars = max_chars or self.s.reply_max_chars
         payload = {
             "model": self.s.llm_model,
@@ -44,13 +44,19 @@ class LLMClient:
             "max_tokens": self.s.llm_max_tokens,
         }
         buf = ""
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + self.s.llm_total_timeout_ms / 1000
+        first_token_deadline = loop.time() + self.s.llm_first_token_timeout_ms / 1000
         try:
-            async with asyncio.timeout(self.s.llm_total_timeout_ms / 1000):
+            async with asyncio.timeout_at(deadline):
                 async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
                     if resp.status_code != 200:
                         logger.warning("llm http %s", resp.status_code)
                         return None
                     async for line in resp.aiter_lines():
+                        if not buf and loop.time() > first_token_deadline:
+                            logger.warning("llm first-token timeout")
+                            return None
                         if not line or not line.startswith("data:"):
                             continue
                         data = line[5:].strip()
@@ -70,15 +76,27 @@ class LLMClient:
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            text, done = first_sentence_cut(buf, max_chars)
             logger.warning("llm degraded (TimeoutError), partial=%r", buf[:20])
-            return (sanitize_tts(text) if done else None) or None
+            return self._salvage_partial(buf, max_chars)
         except httpx.HTTPError as exc:
             logger.warning("llm degraded (%s), partial=%r", type(exc).__name__, buf[:20])
+            return self._salvage_partial(buf, max_chars)
         except Exception:
             logger.exception("llm unexpected error")
             return None
         return sanitize_tts(buf) or None
+
+    @staticmethod
+    def _salvage_partial(buf: str, max_chars: int) -> str | None:
+        """超时/网络异常时尽量落地已收文本：先取首句；若无句末标点但够长则补句号兜底。"""
+        if not buf:
+            return None
+        text, done = first_sentence_cut(buf, max_chars)
+        if done:
+            return sanitize_tts(text) or None
+        if len(buf.strip()) >= 8:
+            return sanitize_tts(buf.rstrip("，,、 ") + "。") or None
+        return None
 
     async def complete(self, messages: list[dict], max_tokens: int = 300,
                        temperature: float = 0.0) -> str | None:
