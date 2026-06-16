@@ -185,6 +185,11 @@ class DialogOrchestrator:
             _preview(user_text), len(last_bot_before), _preview(last_bot_before),
             dict(state.slots), dict(state.retries or {}), len(state.history or []),
         )
+
+        # 用户无有效输入（ASR 无内容 / 占位符 / 静音）：仅温和回探，绝不进入分类与路由
+        if not (user_text or "").strip():
+            return self._silence_prompt(state, snap, node_before, t0)
+
         state.remember("user", user_text)
 
         # 用户明确要求停止联系 → 结束时进谢绝名单（外呼策略层强制生效）
@@ -345,6 +350,40 @@ class DialogOrchestrator:
             llm_used=llm_used, call_result=state.call_result,
             compliance={"passed": comp.passed, "violations": comp.violations},
             latency_ms=latency,
+        )
+
+    # ---- 静音兜底：用户无有效输入时回探 ----
+    _SILENCE_PROMPTS = (
+        "您好，您方便说话吗？",
+        "嗯，您直接说就行。",
+        "您还在吗？",
+    )
+
+    def _silence_prompt(self, state: CallState, snap, node_before: str,
+                        t0: float) -> "TurnResult":
+        """ASR 无有效内容时，温和回探并停在原节点，绝不推进路由/槽位。"""
+        ctx = self._ctx(state)
+        node = snap.nodes.get(node_before) or snap.nodes[TERMINAL_END]
+        entry = self._entry(snap, node, ctx, state)
+        recent = self._recent_bots(state, n=3)
+        preface = next((p for p in self._SILENCE_PROMPTS if not _is_dup(p, recent)),
+                       self._SILENCE_PROMPTS[0])
+        segments = [preface]
+        if entry and not _is_dup(entry, [preface, *recent]):
+            segments.append(entry)
+        reply = sanitize_tts(self._collapse_self_repeat("".join(segments)))
+        state.remember("bot", reply)
+        logger.info(
+            "dialog turn silence call=%s node=%s preface=%r entry=%r reply=%r",
+            state.call_id, node_before, _preview(preface),
+            _preview(entry), _preview(reply),
+        )
+        metrics.TURNS_TOTAL.labels(action="SILENCE_PROMPT").inc()
+        return TurnResult(
+            call_id=state.call_id, reply=reply, segments=segments,
+            action_type="SILENCE_PROMPT", node_before=node_before,
+            node_after=node_before, slots=dict(state.slots),
+            latency_ms={"total": int(_now_ms() - t0)},
         )
 
     # ================= 内部 =================

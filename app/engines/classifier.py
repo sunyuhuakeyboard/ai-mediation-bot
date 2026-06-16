@@ -114,8 +114,23 @@ class IntentClassifier:
             return None
 
     # ---------------- LLM 兜底通道（关键词命中失败时） ----------------
+    _SYNTHETIC_INPUT_HINTS = (
+        "asr content", "no speech detected", "content empty",
+        "用户未回应", "识别异常", "按键错误",
+    )
+
     async def _via_llm(self, snap, node_id: str, text: str, history) -> ClsResult | None:
         """让 LLM 在已知标签集合内挑一个意图。仅在关键词分类失败时启用。"""
+        # 防御：占位符/非自然语言一律拒绝分类，避免对"ASR content always empty"幻觉打标
+        lowered = text.lower()
+        if any(h in lowered for h in self._SYNTHETIC_INPUT_HINTS):
+            logger.info("llm classifier skipped synthetic_input text=%r", text[:40])
+            return None
+        # 过滤主体为非中文（4 字以上）的纯英文/数字串：典型为上游占位符
+        cn_chars = sum(1 for ch in text if "一" <= ch <= "鿿")
+        if len(text) >= 4 and cn_chars == 0:
+            logger.info("llm classifier skipped non_chinese text=%r", text[:40])
+            return None
         node = snap.nodes.get(node_id) or {}
         # 仅暴露与当前节点候选路由相关的标签；候选不足时退回全标签
         candidates = self._candidate_labels(snap, node_id)

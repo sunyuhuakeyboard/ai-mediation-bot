@@ -90,6 +90,51 @@ def test_okcti_duplicate_qa_does_not_advance_state_twice():
         assert [t["user_text"] for t in transcript["turns"]] == [None, "是我，什么事"]
 
 
+def test_okcti_synthetic_asr_placeholder_stays_at_node():
+    """复现生产事故：usrtype=9 + usrcontent='ASR content always empty'。
+    占位符不得被当作真实话语，状态必须停留在 N002，不能跳到 N005。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_SYN", "START"))
+
+        synthetic = _payload("OKCTI_SYN", "QA", "ASR content always empty")
+        synthetic["usrtype"] = 9
+        resp = client.post("/ivr/okcti/welcome/stream", json=synthetic)
+        assert resp.status_code == 200
+        assert "event:ivr" in resp.text
+
+        state = client.get("/api/v1/calls/OKCTI_SYN/state").json()
+        assert state["current_node"] == "N002"          # 仍在身份确认节点
+        assert "not_self" not in state.get("slots", {})  # 占位符不得污染槽位
+        # 后续用户清晰回应"是我"必须能正常推进
+        resp2 = client.post("/ivr/okcti/welcome/stream",
+                            json=_payload("OKCTI_SYN", "QA", "是我，什么事"))
+        assert resp2.status_code == 200
+        state2 = client.get("/api/v1/calls/OKCTI_SYN/state").json()
+        assert state2["current_node"] == "N007"
+
+
+def test_okcti_n005_recovery_when_user_clarifies_identity():
+    """N005 误判恢复：进入"非本人"节点后用户说"我就是本人"，应回到事项告知而非结束。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_RCV", "START"))
+        # 用户先回答"不是我"被路由到 N005
+        client.post("/ivr/okcti/welcome/stream",
+                    json=_payload("OKCTI_RCV", "QA", "你打错了，不是我"))
+        s1 = client.get("/api/v1/calls/OKCTI_RCV/state").json()
+        assert s1["current_node"] == "N005"
+
+        # 用户更正：我就是本人
+        resp = client.post("/ivr/okcti/welcome/stream",
+                           json=_payload("OKCTI_RCV", "QA", "我就是本人"))
+        assert resp.status_code == 200
+        s2 = client.get("/api/v1/calls/OKCTI_RCV/state").json()
+        # 应路由到 N006 并清掉 not_self
+        assert s2["current_node"] in ("N006", "N007")
+        assert s2["slots"].get("identity_confirmed") is True
+        assert s2["slots"].get("not_self") is False
+        assert s2["ended"] is False
+
+
 def test_okcti_end_returns_minimal_ivr_with_grade():
     with _client() as client:
         client.post("/ivr/okcti/welcome", json=_payload("OKCTI_T3", "START"))

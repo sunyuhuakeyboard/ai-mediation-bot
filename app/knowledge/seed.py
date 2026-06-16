@@ -325,6 +325,11 @@ ROUTES = [
        "TPL_RELAY_001", prio=90, conf=0.65, sets={"call_result": "非本人"}, remark="系统补充：请其转告"),
     _r("R111", "N005", "NOT_KNOW", {}, "N024", "END_CALL", "STR_NON_SELF",
        "TPL_END_001", prio=88, conf=0.65, sets={"call_result": "非本人"}, remark="系统补充"),
+    # 恢复路径：误判为"非本人"后用户澄清"我就是本人" → 回到事项告知，撤回 not_self 标记
+    _r("R112", "N005", "CONFIRM_SELF", {}, "N006", "DIRECT_TEMPLATE",
+       "STR_CASE_NOTICE", "TPL_CASE_NOTICE_001", prio=95, conf=0.7,
+       sets={"identity_confirmed": True, "not_self": False},
+       remark="系统补充：N005 误判恢复"),
     _r("R120", "N007", "NOTICE_RECEIVED", {}, "N009", "DIRECT_TEMPLATE", "STR_ACCEPT",
        "TPL_WILL_001", prio=88, conf=0.65, remark="系统补充：收到通知→问意愿"),
     _r("R121", "N007", "NOTICE_NOT_RECEIVED", {}, "N008", "DIRECT_TEMPLATE",

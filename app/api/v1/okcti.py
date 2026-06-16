@@ -302,16 +302,27 @@ async def _case_from_request(req: OkctiRequest, calls) -> dict:
     }
 
 
+# usrtype 7=按键错误 8=ASR识别异常 9=用户未回应 → 任何 usrcontent 都视为占位符
+_NO_REAL_INPUT_USRTYPES = {7, 8, 9}
+# 部分上游会以英文占位符填 usrcontent，需作为"无输入"处理而不是真实话语
+_SYNTHETIC_ASR_HINTS = (
+    "asr content always empty", "asr content empty",
+    "content always empty", "asr empty", "no speech detected",
+)
+
+
 def _user_text(req: OkctiRequest) -> str:
-    if req.usrcontent:
-        return req.usrcontent
-    if req.usrtype == 9:
-        return "用户未回应"
-    if req.usrtype == 8:
-        return "识别异常"
-    if req.usrtype == 7:
-        return "按键错误"
-    return ""
+    """从 OKCTI 请求中提取真实用户话语；占位符 / 无回应 / ASR 异常一律返回 ''."""
+    if req.usrtype in _NO_REAL_INPUT_USRTYPES:
+        return ""
+    content = (req.usrcontent or "").strip()
+    if not content:
+        return ""
+    if any(h in content.lower() for h in _SYNTHETIC_ASR_HINTS):
+        logger.info("okcti synthetic asr placeholder ignored call=%s content=%r",
+                    req.callid, _preview(content))
+        return ""
+    return content
 
 
 def _check_auth(s: Settings, x_request_id: str | None, x_app_id: str | None,
