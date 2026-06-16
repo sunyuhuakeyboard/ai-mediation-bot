@@ -121,6 +121,60 @@ async def test_asr_fragment_merge():
     assert state.last_fragment is None
 
 
+# ================= 调解口吻：角色提示词 / TONE 组件 =================
+async def test_prompt_contains_mediation_neutral_third_party_framing():
+    """LLM 提示词需明确"独立第三方/不催收/不施压"，避免被理解为催收。"""
+
+    class CaptureLLM:
+        def __init__(self): self.last = ""
+        async def short_reply(self, messages, max_chars=None):
+            self.last = messages[-1]["content"]
+            return None
+        async def complete_short(self, messages, **kw):
+            return None
+
+    llm = CaptureLLM()
+    orch = make_orchestrator(llm)
+    state, _ = await new_call(orch)
+    await orch.handle_turn(state, "我是")
+    await orch.handle_turn(state, "收到了")
+    await orch.handle_turn(state, "现在确实没钱")    # 触发 N018 LLM_SHORT_REPLY
+    assert "独立第三方" in llm.last or "不催收" in llm.last
+    assert "不施压" in llm.last
+
+
+async def test_tone_component_injected_when_emotion_not_calm():
+    """情绪激动时 TONE 组件应进入提示词，'平稳'时不应进入（节省 prompt 长度）。"""
+
+    class CaptureLLM:
+        def __init__(self): self.last = ""
+        async def short_reply(self, messages, max_chars=None):
+            self.last = messages[-1]["content"]
+            return None
+        async def complete_short(self, messages, **kw):
+            return None
+
+    llm = CaptureLLM()
+    orch = make_orchestrator(llm)
+    state, _ = await new_call(orch)
+    await orch.handle_turn(state, "我是")
+    await orch.handle_turn(state, "收到了")
+    # 激动用户：含愤怒关键词，将被分类为"激动"情绪 → TONE 必现
+    await orch.handle_turn(state, "烦死了，凭什么我得还")
+    assert "用户当前情绪" in llm.last
+    assert "承接情绪" in llm.last or "放慢节奏" in llm.last
+
+
+def test_closing_template_carries_mediator_followup_commitment():
+    """调解结束语应承诺如实反馈、礼貌结束，符合中立角色。"""
+    cache = KnowledgeCache(); cache.load_from_seed()
+    snap = cache.snap()
+    end_tpl = snap.templates["TPL_END_001"]
+    assert "如实反馈" in end_tpl["template_text"]
+    assert "感谢" in end_tpl["template_text"]
+    assert "再见" in end_tpl["template_text"]
+
+
 # ================= UNKNOWN长尾：受限LLM应答 =================
 # ================= LLM 兜底意图分类 =================
 async def test_llm_classifier_promotes_unknown_to_known_intent():

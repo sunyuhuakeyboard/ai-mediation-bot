@@ -10,9 +10,15 @@ from __future__ import annotations
 from app.utils.text import render
 
 DEFAULT_COMPONENTS = ["ROLE", "HISTORY", "NODE", "USER_TEXT", "KNOWN", "CLASSIFY",
-                      "STRATEGY", "SCRIPT", "PRIVACY", "CASE_SAFE", "COMPLIANCE",
-                      "NO_REPEAT", "OUTPUT"]
+                      "TONE", "STRATEGY", "SCRIPT", "PRIVACY", "CASE_SAFE",
+                      "COMPLIANCE", "NO_REPEAT", "OUTPUT"]
 _MANDATORY = ("ROLE", "COMPLIANCE", "OUTPUT")
+
+_TONE_GUIDANCE = {
+    "激动": "先用一句话承接情绪、放慢节奏，不要直接进入业务问题，让用户感到被听见。",
+    "低落": "用温和共情的口吻回应，肯定用户的处境，避免任何评判或催促。",
+    "平稳": "保持温和专业的语气，让用户感到放松，不要急于推进。",
+}
 
 
 _SLOT_FACT_LABELS = (("repayment_amount", "可还金额"), ("repayment_date", "还款时间"),
@@ -72,6 +78,8 @@ def build_messages(snap, route: dict, node: dict, strategy: dict | None,
             continue
         if cid == "NO_REPEAT" and not recent_bot:
             continue
+        if cid == "TONE" and getattr(cls, "emotion", "平稳") == "平稳":
+            continue   # 平稳情绪无需额外引导，节省 prompt 长度
         if cid == "CASE_SAFE":
             if not identity:
                 continue
@@ -83,6 +91,7 @@ def build_messages(snap, route: dict, node: dict, strategy: dict | None,
         picked.append(comp)
     picked.sort(key=lambda c: c.get("priority", 50), reverse=True)
 
+    emotion = getattr(cls, "emotion", "平稳") or "平稳"
     variables = {
         "node_name": node.get("node_name") or "",
         "node_goal": node.get("node_goal") or "",
@@ -90,6 +99,8 @@ def build_messages(snap, route: dict, node: dict, strategy: dict | None,
         "intent": cls.intent,
         "objection": cls.objection or "无",
         "risk": cls.risk,
+        "emotion": emotion,
+        "tone_guidance": _TONE_GUIDANCE.get(emotion, _TONE_GUIDANCE["平稳"]),
         "strategy_instruction": (strategy or {}).get("instruction") or "",
         "template_text": (template or {}).get("template_text") or "",
         "history_text": history_text,

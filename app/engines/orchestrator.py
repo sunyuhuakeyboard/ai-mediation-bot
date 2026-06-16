@@ -352,11 +352,11 @@ class DialogOrchestrator:
             latency_ms=latency,
         )
 
-    # ---- 静音兜底：用户无有效输入时回探 ----
+    # ---- 静音兜底：用户无有效输入时温和回探（调解中立口吻） ----
     _SILENCE_PROMPTS = (
-        "您好，您方便说话吗？",
-        "嗯，您直接说就行。",
-        "您还在吗？",
+        "您好，您慢慢说，听到您说话就行。",
+        "嗯，您方便的话就说说目前的情况。",
+        "您那边还在听吗？我这边等您一下。",
     )
 
     def _silence_prompt(self, state: CallState, snap, node_before: str,

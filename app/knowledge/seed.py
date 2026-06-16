@@ -147,7 +147,8 @@ LABELS = [
          risk_level="高", suggest_node="N013", global_priority=False, confidence_min=0.75,
          objection_label="DENY_DEBT", remark="不争辩"),
     dict(label_id="ALREADY_PAID", label_type="抗性", label_name="已还款", category="争议类",
-         keywords=["已经还", "早就还", "还清", "还完了", "结清"], risk_level="中",
+         keywords=["已经还", "早就还", "还清", "还完了", "结清", "之前还过", "前阵子还了",
+                   "我之前给过", "前段时间处理了"], risk_level="中",
          suggest_node="N014", global_priority=False, confidence_min=0.75,
          objection_label="ALREADY_PAID", remark="引导凭证"),
     dict(label_id="AMOUNT_DISPUTE", label_type="抗性", label_name="金额异议", category="争议类",
@@ -159,7 +160,10 @@ LABELS = [
          suggest_node="N016", global_priority=False, confidence_min=0.7,
          objection_label="PLATFORM_QUESTION"),
     dict(label_id="NO_MONEY", label_type="抗性", label_name="暂无还款能力", category="能力类",
-         keywords=["没钱", "没有钱", "失业", "工资没发", "还不上", "还不起", "拿不出", "周转不开", "确实困难"],
+         keywords=["没钱", "没有钱", "失业", "失业了", "没工作", "工资没发", "工资还没发",
+                   "还不上", "还不起", "拿不出", "周转不开", "确实困难", "实在没办法",
+                   "孩子上学", "孩子学费", "家里人生病", "家人住院", "看病", "看病去了",
+                   "刚交了房租", "还了房贷", "刚发工资就", "暂时拿不出", "家里有事"],
          risk_level="中", suggest_node="N018", global_priority=False, confidence_min=0.7,
          objection_label="NO_PAYMENT_ABILITY", remark="共情探询"),
     dict(label_id="REQUEST_INSTALLMENT", label_type="意图", label_name="请求分期", category="方案类",
@@ -197,7 +201,9 @@ LABELS = [
          suggest_node="N009", global_priority=False, confidence_min=0.7, objection_label=None,
          remark="系统补充"),
     dict(label_id="HESITATE", label_type="意图", label_name="犹豫观望", category="意愿类",
-         keywords=["再说吧", "考虑", "看看吧", "想想", "再联系", "到时候再说"], risk_level="低",
+         keywords=["再说吧", "考虑", "考虑一下", "考虑下", "看看吧", "想想", "想想吧",
+                   "再联系", "到时候再说", "和家里商量", "跟家里人说", "我得问问家里",
+                   "我得想想"], risk_level="低",
          suggest_node="N012", global_priority=False, confidence_min=0.65, objection_label=None,
          remark="系统补充"),
     dict(label_id="KNOWS_PERSON", label_type="意图", label_name="认识当事人", category="身份类",
@@ -423,16 +429,21 @@ STRATEGIES = [
        "用户没收到通知时，说明可核验或重新发送，不强迫点击链接。",
        "说明通知渠道、继续询问意愿", "强迫点击、催促处理", "可", "中", "TPL_NOTICE_001"),
     _s("STR_ACCEPT", "承接愿意调解", "N010", "ACCEPT_MEDIATION", "进入方案沟通",
-       "用户愿意沟通时，承接态度并询问处理想法。", "询问诉求/方案", "承诺结果", "可", "低", "TPL_ACCEPT_001"),
+       "用户愿意沟通时，先简短确认听到其态度，再用开放式提问把决定权交给用户，"
+       "让用户自己说出时间/金额的初步想法；不替用户决定、不抛具体方案。",
+       "承接态度、开放提问", "替用户决定、承诺结果", "可", "低", "TPL_ACCEPT_001"),
     _s("STR_REFUSE", "尊重拒调", "N011", "REFUSE_MEDIATION", "合规结束或记录",
        "调解自愿，用户拒绝时如实记录，不施压。", "记录拒绝、礼貌结束", "恐吓、持续纠缠", "否", "中", "TPL_REFUSE_001"),
     _s("STR_DENY_DEBT", "否认欠款处理", "N013", "DENY_DEBT", "记录争议",
-       "不争辩、不直接认定欠款事实，引导用户核对账单/合同。",
+       "用户对欠款有异议。先承接其质疑（如'您的疑问我会如实记录'），"
+       "再说明可通过官方账单/合同核对，引导核实而非辩论，作为中立第三方不预设事实。",
        "记录异议、引导核对", "争辩、定性欠款事实", "可", "高", "TPL_DENY_001"),
     _s("STR_ALREADY_PAID", "已还款凭证", "N014", "ALREADY_PAID", "记录并引导凭证",
        "用户称已还款时，引导提交凭证，后续核实。", "记录、引导凭证", "直接否定用户", "否", "中", "TPL_PAID_001"),
     _s("STR_NO_MONEY", "无力还款共情", "N018", "NO_MONEY", "降低抵触并探询可承受方案",
-       "先共情，不施压，再询问可接受时间、金额或分期方式。",
+       "用户表达资金困难。先用一句话承接其难处（如理解、不容易、知道您也想处理），"
+       "再用开放式提问探询能承受的时间或金额，让用户自己提出方案。"
+       "调解的目标是找到双方都能接受的安排，绝不施压、不强求一次还清、不评判。",
        "共情、探询方案", "威胁、羞辱、要求立即还款", "是", "中", "TPL_NO_MONEY_001"),
     _s("STR_INSTALLMENT", "分期方案收集", "N019", "REQUEST_INSTALLMENT", "收集分期要素",
        "询问分几期、每期金额、首期时间，不承诺通过。",
@@ -442,7 +453,9 @@ STRATEGIES = [
     _s("STR_PLAN_CONFIRM", "方案复述确认", "N021", "PROVIDE_PLAN", "确认方案准确性",
        "复述用户提出的金额、时间、期数，确认是否准确。", "复述确认、记录", "增加用户未说内容", "是", "低", "TPL_PLAN_CONFIRM_001"),
     _s("STR_CALLBACK", "预约回访", "N022", "REQUEST_CALLBACK", "确定回访时间",
-       "用户不方便时约定具体回访时间，避免频繁打扰。", "询问时间、记录预约", "频繁骚扰", "是", "低", "TPL_CALLBACK_001"),
+       "用户不方便时不强求当下沟通，温和约一个用户方便的具体时间，"
+       "强调按用户方便来安排，绝不频繁打扰。",
+       "询问用户方便时间、记录预约", "强行追问、频繁致电", "是", "低", "TPL_CALLBACK_001"),
     _s("STR_TRANSFER", "转人工", "N025", "REQUEST_HUMAN/高风险", "风险兜底",
        "用户要求人工或风险高时，转人工或记录人工回访。", "转人工、记录", "继续争辩", "否", "高", "TPL_TRANSFER_001"),
     _s("STR_COMPLAINT", "投诉降温", "N025", "COMPLAINT_THREAT", "降低冲突",
@@ -487,10 +500,12 @@ TEMPLATES = [
     _t("TPL_PAID_001", "N014", "STR_ALREADY_PAID", "ALREADY_PAID",
        "好的，您可以保留或提交相关还款凭证，后续会进一步核实。", score=95, remark="已还款"),
     _t("TPL_NO_MONEY_001", "N018", "STR_NO_MONEY", "NO_MONEY",
-       "理解您的情况，您可以先说下目前能接受的时间或金额。", direct=True, rewrite=True,
-       score=94, remark="建议LLM改写更自然",
-       variants=["明白，谁都有难处，您看大概什么时间、多少金额您能接受？",
-                 "没事，您先说说目前能周转的时间或金额，咱们慢慢商量。"]),
+       "您说的难处我也能理解，调解就是想帮您找到一个您能承担的方案，"
+       "您看时间或金额上，您这边大概能怎么安排？", direct=True, rewrite=True,
+       score=94, remark="建议LLM改写更自然，强调中立第三方与开放式询问",
+       variants=["谁都有难处，您先说说目前能周转的时间或金额，咱们一起想个您能接受的方式。",
+                 "您的情况我也理解，您看时间上或金额上，您这边大致能承担怎样的安排？",
+                 "确实不容易，您能告诉我大致什么时间、多少金额您能接受吗？我帮您反馈过去。"]),
     _t("TPL_INSTALLMENT_001", "N019", "STR_INSTALLMENT", "REQUEST_INSTALLMENT",
        "可以，您可以说一下希望分几期、每期大概能承担多少。", direct=True, rewrite=True, score=94, remark="分期"),
     _t("TPL_REDUCTION_001", "N020", "STR_REDUCTION", "REQUEST_REDUCTION",
@@ -503,7 +518,9 @@ TEMPLATES = [
     _t("TPL_SUMMARY_001", "N023", "STR_PLAN_CONFIRM", "总结",
        "好的，您刚才的意见我已经如实记录，后续会按流程反馈。", score=90, remark="总结"),
     _t("TPL_END_001", "N024", "STR_REFUSE", "结束",
-       "感谢您的配合，祝您生活愉快，再见。", score=90, remark="结束"),
+       "好的，今天就先沟通到这里，您的意见我会如实反馈，"
+       "后续如有进展会再与您联系。感谢您的配合，祝您生活愉快，再见。",
+       score=90, remark="结束：补充反馈与回访承诺，符合调解中立角色"),
     _t("TPL_TRANSFER_001", "N025", "STR_TRANSFER", "REQUEST_HUMAN/高风险",
        "我这边先记录您的情况，后续可由人工工作人员再联系您。", score=98, remark="转人工"),
     _t("TPL_COOLDOWN_001", "N025", "STR_COOLDOWN", "ABUSIVE_LANGUAGE",
@@ -517,8 +534,11 @@ TEMPLATES = [
        "调解是自愿的沟通方式，请问您是否愿意通过调解来处理这个事项？", remark="系统补充",
        variants=["调解是自愿免费的，您看愿不愿意通过调解来沟通处理这件事？"]),
     _t("TPL_HESITATE_001", "N012", "STR_ACCEPT", "HESITATE",
-       "没关系，调解是自愿免费的沟通，主要帮双方核对情况、协商方案，您可以说说您的顾虑。",
-       remark="系统补充"),
+       "没关系，调解是双方自愿、免费的沟通，主要帮您把想法如实带过去，"
+       "您可以慢慢说您的顾虑或想了解的地方。",
+       remark="系统补充",
+       variants=["没事，调解就是想听听您这边的想法，您慢慢说，看哪些方面我能帮您。",
+                 "理解，您先说说目前最担心的是哪一块，我们一起看怎么处理比较合适。"]),
     _t("TPL_AMOUNT_001", "N015", "STR_DENY_DEBT", "AMOUNT_DISPUTE",
        "您对金额的异议我会如实记录，后续可以核对账单明细。", remark="系统补充"),
     _t("TPL_PLATFORM_001", "N016", "STR_DENY_DEBT", "PLATFORM_QUESTION",
@@ -536,13 +556,14 @@ TEMPLATES = [
        "好的，那麻烦您方便时转告一下，请其留意短信通知，感谢您。", remark="系统补充"),
     _t("TPL_CALLBACK_OK_001", "N022", "STR_CALLBACK", "PROVIDE_PLAN",
        "好的，那{callback_time}我们再与您联系，感谢您的配合，再见。", ["callback_time"], remark="系统补充"),
-    _t("TPL_RETRY_001", "ANY", None, "FALLBACK", "好的，您直说就行。",
-       remark="系统补充：重试前缀（不暗示未听清，邀请用户直说）",
-       variants=["嗯，您方便的话简单告诉我就行。",
-                 "好的，您说说您的想法。",
-                 "理解，您看怎么处理比较方便？",
-                 "嗯嗯，您直接告诉我您的初步打算就行。",
-                 "可以的，您把您的意见告诉我即可。"]),
+    _t("TPL_RETRY_001", "ANY", None, "FALLBACK",
+       "好的，您说说目前的情况就行，咱们一起看看怎么处理。",
+       remark="系统补充：重试前缀（邀请用户表达，强调中立第三方协商）",
+       variants=["嗯，您方便聊聊您的想法吗，我们尽量按您能接受的来。",
+                 "您看您这边大致是什么打算，我们一起商量。",
+                 "好的，您直接说说您现在的实际情况就行。",
+                 "您说说您的考虑，我会如实把您的意见带过去。",
+                 "理解，您看您这边怎么处理比较方便？"]),
     _t("TPL_FALLBACK_001", "ANY", None, "FALLBACK",
        "我这边先记录您的意见，后续可由人工工作人员再与您联系。", remark="系统补充：全局兜底（方案5.8.4）"),
     _t("TPL_ASK_AMOUNT_001", "ANY", "STR_PLAN_CONFIRM", "ASK_SLOT",
@@ -580,7 +601,9 @@ def _c(cid, ctype, nodes, cond, content, prio, required, remark=""):
 
 COMPONENTS = [
     _c("ROLE", "角色组件", "ALL", "调用LLM时",
-       "你是民商事电话调解员，语气自然、克制、简短、合规。", 100, True),
+       "你是民事调解员，作为独立第三方协助借贷双方沟通，不是催收。"
+       "语气温和、共情、专业、克制；先听用户的难处与意愿，再一起寻找双方都能接受的方案。"
+       "绝不施压、不威胁、不评判、不承诺减免结果。所有方案最终都需要对方确认。", 100, True),
     _c("NODE", "节点组件", "ALL", "调用LLM时",
        "当前节点：{node_name}。节点目标：{node_goal}。", 90, True, "由节点表动态填充"),
     _c("USER_TEXT", "用户输入组件", "ALL", "调用LLM时", "用户刚才说：{user_text}", 90, True),
@@ -604,6 +627,9 @@ COMPONENTS = [
     _c("NO_REPEAT", "防重复组件", "ALL", "调用LLM时",
        "你最近说过：{recent_bot_lines}。请换不同的措辞，不要重复同样的话。", 83, False,
        "系统补充：防复读机"),
+    _c("TONE", "情绪适配组件", "ALL", "调用LLM时",
+       "用户当前情绪：{emotion}。{tone_guidance}", 86, False,
+       "系统补充：根据情绪挑选共情措辞"),
 ]
 
 # UNKNOWN长尾自由应答（受限）：简短回应 + 拉回流程，由 orchestrator 在 fallback 前调用
@@ -613,9 +639,9 @@ FREEFORM_STRATEGY = dict(
                  "再用自然口语把话题引回当前节点目标；严禁逐字重复你最近说过的话，"
                  "不编造案件细节、不做法律结论、不承诺减免或放款，"
                  "若参考话术非空，可借鉴其措辞但要换一种说法。"))
-# 长尾应答启用 SCRIPT 与 CASE_SAFE：让模型看到当前节点主问句的措辞，避免无源即兴
+# 长尾应答启用 SCRIPT/CASE_SAFE/TONE：让模型看到节点主问句与用户情绪，避免无源即兴
 FREEFORM_COMPONENTS = ["ROLE", "HISTORY", "NODE", "USER_TEXT", "KNOWN", "CLASSIFY",
-                       "STRATEGY", "SCRIPT", "CASE_SAFE", "PRIVACY",
+                       "TONE", "STRATEGY", "SCRIPT", "CASE_SAFE", "PRIVACY",
                        "COMPLIANCE", "NO_REPEAT", "OUTPUT"]
 
 # 用户明确要求停止联系 → 进DNC谢绝名单（外呼策略层强制生效）
