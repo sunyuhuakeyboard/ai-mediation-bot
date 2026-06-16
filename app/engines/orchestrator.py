@@ -275,15 +275,28 @@ class DialogOrchestrator:
         return ctx
 
     def _tpl(self, snap, template_id: str | None, ctx: dict,
-             state: CallState | None = None) -> str:
+             state: CallState | None = None,
+             avoid_refs: list[str] | None = None) -> str:
+        """渲染模板。多变体场景下，优先返回与 avoid_refs 都不复读的候选。"""
         t = snap.templates.get(template_id or "")
         if not t:
             return ""
         texts = [t["template_text"], *(t.get("variants") or [])]
+        if not texts:
+            return ""
         if state is not None and self.s.variant_rotation and len(texts) > 1:
+            n = len(texts)
             cur = state.variant_cursor.get(t["template_id"], 0)
-            text = texts[cur % len(texts)]                  # 顺序轮换，本通不重复
-            state.variant_cursor[t["template_id"]] = cur + 1
+            chosen, idx = texts[cur % n], cur
+            if avoid_refs:
+                refs = [r for r in avoid_refs if r]
+                for offset in range(n):
+                    cand = texts[(cur + offset) % n]
+                    if not _is_dup(cand, refs):
+                        chosen, idx = cand, cur + offset
+                        break
+            state.variant_cursor[t["template_id"]] = idx + 1
+            text = chosen
         else:
             text = texts[0]
         return strip_unfilled(render(text, ctx))
@@ -297,6 +310,25 @@ class DialogOrchestrator:
             if role == "bot" and text:
                 return str(text)
         return ""
+
+    @staticmethod
+    def _collapse_self_repeat(text: str) -> str:
+        """合并一句话内相邻重复子句：'我这边再确认一下。我这边再确认一下' → 单句。"""
+        if not text:
+            return text
+        parts = re.split(r"(?<=[。！？!?])", text)
+        out, seen = [], set()
+        for p in parts:
+            key = _norm(p)
+            if not key:
+                if p:
+                    out.append(p)
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(p)
+        return "".join(out)
 
     @staticmethod
     def _strip_overlap_prefix(reply: str, last: str) -> str:
@@ -462,16 +494,20 @@ class DialogOrchestrator:
         try:
             pseudo_route = {"prompt_component_ids": FREEFORM_COMPONENTS,
                             "action_type": "LLM_SHORT_REPLY"}
-            msgs = build_messages(snap, pseudo_route, node, FREEFORM_STRATEGY, None,
-                                  cls, user_text, ctx, state.slots, history=state.history)
+            # 把当前节点主问句作为 SCRIPT 喂给模型，让 LLM 看到目标话术再换种说法；
+            # 同一次 _entry 调用复用：避免变体游标二次推进导致拉回时撞上上一轮原句
+            entry_text = self._entry(snap, node, ctx, state)
+            pseudo_template = {"template_text": entry_text} if entry_text else None
+            msgs = build_messages(snap, pseudo_route, node, FREEFORM_STRATEGY,
+                                  pseudo_template, cls, user_text, ctx, state.slots,
+                                  history=state.history)
             out = await self.llm.short_reply(msgs)
             if out and len(out) >= 4:
                 metrics.LLM_CALLS.labels(outcome="ok").inc()
-                entry = self._entry(snap, node, ctx, state)
                 last_bot = self._last_bot(state)
-                if (entry and not out.rstrip().endswith(_QUESTION_ENDINGS)
-                        and not _is_dup(entry, [out, last_bot])):
-                    out = out + entry   # 拉回节点主问句
+                if (entry_text and not out.rstrip().endswith(_QUESTION_ENDINGS)
+                        and not _is_dup(entry_text, [out, last_bot])):
+                    out = out + entry_text   # 拉回节点主问句
                 return out
             metrics.LLM_CALLS.labels(outcome="fallback").inc()
         except Exception:
@@ -505,10 +541,12 @@ class DialogOrchestrator:
         if free:
             return [free], node, False, False, True
 
-        retry = self._tpl(snap, "TPL_RETRY_001", ctx, state)
-        entry = self._entry(snap, node, ctx, state)
         last_bot = self._last_bot(state)
+        retry = self._tpl(snap, "TPL_RETRY_001", ctx, state,
+                          avoid_refs=[last_bot])
+        entry = self._entry(snap, node, ctx, state)
         # 用户刚听过节点主问句：仅给出转折提示，避免连续两轮原样复读
         if entry and last_bot and _is_dup(entry, [last_bot]):
             return [retry], node, False, False, False
-        return [(retry + entry) if entry else retry], node, False, False, False
+        merged = (retry + entry) if entry else retry
+        return [self._collapse_self_repeat(merged)], node, False, False, False

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     llm_connect_timeout_ms: int = 300
     llm_first_token_timeout_ms: int = 1500        # 首token超时：连接成功但首字符迟迟不到 → 立即兜底
     llm_total_timeout_ms: int = 3000              # 总预算：首token到首句结束；超时仍尝试落地部分输出
+    llm_disable_thinking: bool = True             # 关闭思考模式：短回复无需推理，降低首token延迟
     reply_max_chars: int = 48                     # 单句输出上限（约束"不超过30字"留余量）
 
     # 金额/时间复述强制走模板渲染（零幻觉），不交给LLM改写

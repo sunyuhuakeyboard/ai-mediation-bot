@@ -217,9 +217,58 @@ async def test_fallback_skips_entry_when_user_just_heard_it():
     r1 = await orch.handle_turn(state, "呜啦呜啦巴拉巴拉")
     assert r1.action_type == "FALLBACK"
     # 仍需给出转折提示，让用户知道"未听清"
-    assert "再确认" in r1.reply or "回到当前问题" in r1.reply
+    assert any(kw in r1.reply for kw in ("再确认", "回到当前问题", "换个方式", "再对一下"))
     # 主问句不应在 fallback 中再次播报
     assert "请问您是" not in r1.reply
+
+
+# ---------------- 复读抑制：fallback 连续两轮 retry 必须换变体 ----------------
+async def test_consecutive_fallbacks_use_different_retry_variants():
+    """两轮 fallback 之间，TPL_RETRY_001 必须选用与上一轮 bot 不同的变体。"""
+    orch = make_orchestrator(FakeLLM())
+    state, _ = await new_call(orch)
+    r1 = await orch.handle_turn(state, "呜啦呜啦")
+    r2 = await orch.handle_turn(state, "巴拉巴拉")
+    from app.engines.orchestrator import _norm
+    assert _norm(r1.reply) != _norm(r2.reply)
+
+
+# ---------------- 复读抑制：一句话内相邻重复子句压缩 ----------------
+def test_collapse_self_repeat_in_single_string():
+    from app.engines.orchestrator import DialogOrchestrator
+    collapse = DialogOrchestrator._collapse_self_repeat
+    assert collapse("我这边再确认一下。我这边再确认一下。") == "我这边再确认一下。"
+    assert collapse("好的。好的。请稍等。") == "好的。请稍等。"
+    assert collapse("请问几点？请问几点？") == "请问几点？"
+    assert collapse("您好。再见。") == "您好。再见。"
+
+
+# ---------------- LLM 短回复：思考模式关闭 ----------------
+async def test_llm_payload_disables_thinking_when_configured():
+    from app.engines.llm_client import LLMClient
+
+    class CaptureClient:
+        def __init__(self):
+            self.captured = {}
+
+        def stream(self, method, url, json):
+            self.captured = json
+
+            class _Ctx:
+                async def __aenter__(self_inner):
+                    raise RuntimeError("short-circuit")
+
+                async def __aexit__(self_inner, *a):
+                    return False
+
+            return _Ctx()
+
+    settings = get_settings()
+    llm = LLMClient(settings)
+    capture = CaptureClient()
+    llm.client = capture
+    await llm.short_reply([{"role": "user", "content": "hi"}])
+    assert capture.captured.get("thinking") == {"type": "disabled"}
 
 
 # ---------------- 复读抑制：_avoid_repeat 压缩重复前缀 ----------------

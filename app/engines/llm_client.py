@@ -43,6 +43,9 @@ class LLMClient:
             "temperature": self.s.llm_temperature,
             "max_tokens": self.s.llm_max_tokens,
         }
+        if self.s.llm_disable_thinking:
+            # 豆包/方舟兼容字段：短回复无需思考过程，显著降低首token延迟
+            payload["thinking"] = {"type": "disabled"}
         buf = ""
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self.s.llm_total_timeout_ms / 1000

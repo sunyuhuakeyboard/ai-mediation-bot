@@ -533,7 +533,10 @@ TEMPLATES = [
        "好的，那{callback_time}我们再与您联系，感谢您的配合，再见。", ["callback_time"], remark="系统补充"),
     _t("TPL_RETRY_001", "ANY", None, "FALLBACK", "我这边再确认一下。",
        remark="系统补充：重试前缀",
-       variants=["刚才这句我没有确认准，我们再回到当前问题。"]),
+       variants=["刚才这句我没有确认准，我们再回到当前问题。",
+                 "好的，我换个方式跟您核对一下。",
+                 "嗯，可能我没说清楚，您稍等一下。",
+                 "理解，您方便的话我们再对一下。"]),
     _t("TPL_FALLBACK_001", "ANY", None, "FALLBACK",
        "我这边先记录您的意见，后续可由人工工作人员再与您联系。", remark="系统补充：全局兜底（方案5.8.4）"),
     _t("TPL_ASK_AMOUNT_001", "ANY", "STR_PLAN_CONFIRM", "ASK_SLOT",
@@ -600,11 +603,14 @@ COMPONENTS = [
 # UNKNOWN长尾自由应答（受限）：简短回应 + 拉回流程，由 orchestrator 在 fallback 前调用
 FREEFORM_STRATEGY = dict(
     strategy_id="STR_FREEFORM", strategy_name="长尾自由应答",
-    instruction=("用户这句话不在标准流程内。用一句话简短、自然地回应用户，"
-                 "不编造案件细节，不做法律结论，不承诺任何结果，"
-                 "然后把话题引回当前节点要确认的问题。"))
-FREEFORM_COMPONENTS = ["ROLE", "HISTORY", "NODE", "USER_TEXT", "KNOWN",
-                       "STRATEGY", "COMPLIANCE", "NO_REPEAT", "OUTPUT"]
+    instruction=("用户刚才的回应没有命中标准流程。用一句话先承接用户语气（理解/确认/共情），"
+                 "再用自然口语把话题引回当前节点目标；严禁逐字重复你最近说过的话，"
+                 "不编造案件细节、不做法律结论、不承诺减免或放款，"
+                 "若参考话术非空，可借鉴其措辞但要换一种说法。"))
+# 长尾应答启用 SCRIPT 与 CASE_SAFE：让模型看到当前节点主问句的措辞，避免无源即兴
+FREEFORM_COMPONENTS = ["ROLE", "HISTORY", "NODE", "USER_TEXT", "KNOWN", "CLASSIFY",
+                       "STRATEGY", "SCRIPT", "CASE_SAFE", "PRIVACY",
+                       "COMPLIANCE", "NO_REPEAT", "OUTPUT"]
 
 # 用户明确要求停止联系 → 进DNC谢绝名单（外呼策略层强制生效）
 DNC_PHRASES = ("别再打", "不要再打", "别打了", "别给我打", "不要给我打", "再打我就")

@@ -136,8 +136,10 @@ async def test_freeform_fallback_with_llm():
     assert state.current_node == "N009"
     assert llm.calls == 1
     # 提示词应含长尾策略与记忆组件
-    assert "不在标准流程内" in llm.last_prompt
+    assert "没有命中标准流程" in llm.last_prompt
     assert "最近对话" in llm.last_prompt
+    # 新增：动态把当前节点主问句作为参考话术喂给模型
+    assert "参考话术" in llm.last_prompt
 
 
 async def test_freeform_llm_output_still_compliance_checked():
