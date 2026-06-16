@@ -196,6 +196,52 @@ async def test_fallback_retry_then_jump():
     assert "工作人员" in r3.reply                            # N003 身份解释话术
 
 
+# ---------------- 复读抑制：归一化辅助 ----------------
+def test_is_dup_normalized_helper():
+    """跨标点/空白的同义句应被识别为复读，不同句子不应误杀。"""
+    from app.engines.orchestrator import _is_dup
+    assert _is_dup("您好，调解中心。", ["您好 调解中心"])
+    assert _is_dup("感谢配合！", ["感谢配合。"])
+    assert _is_dup("请问您是张三本人吗？", ["请问您是张三本人吗"])
+    assert not _is_dup("您好", ["请问几点"])
+    assert not _is_dup("", ["任意"])
+    assert not _is_dup("您好", [])
+
+
+# ---------------- 复读抑制：fallback 不重复节点主问句 ----------------
+async def test_fallback_skips_entry_when_user_just_heard_it():
+    """上一轮 bot 已问过节点主问句，本轮 fallback 仅给转折提示。"""
+    orch = make_orchestrator(FakeLLM())
+    state, _ = await new_call(orch)
+    # 开场已经播报 N002 主问句"请问您是张三本人吗？"
+    r1 = await orch.handle_turn(state, "呜啦呜啦巴拉巴拉")
+    assert r1.action_type == "FALLBACK"
+    # 仍需给出转折提示，让用户知道"未听清"
+    assert "再确认" in r1.reply or "回到当前问题" in r1.reply
+    # 主问句不应在 fallback 中再次播报
+    assert "请问您是" not in r1.reply
+
+
+# ---------------- 复读抑制：_avoid_repeat 压缩重复前缀 ----------------
+async def test_avoid_repeat_strips_overlap_prefix():
+    orch = make_orchestrator(FakeLLM())
+    state, _ = await new_call(orch)
+    reply, segs = orch._avoid_repeat(
+        "您好调解中心。请问您方便吗？",
+        ["您好调解中心。请问您方便吗？"],
+        _state_with_last_bot("您好，调解中心！"),
+    )
+    # 上一轮 bot 已说过"您好，调解中心"，本轮应只保留新增问句
+    assert "请问您方便" in reply
+    assert reply.startswith("请问") or "您好调解中心" not in reply
+
+
+def _state_with_last_bot(last: str) -> CallState:
+    state = CallState(call_id="DUP_T", case=dict(DEMO_CASE))
+    state.remember("bot", last)
+    return state
+
+
 # ---------------- 打点与状态字段 ----------------
 async def test_latency_and_segments():
     orch = make_orchestrator(FakeLLM())

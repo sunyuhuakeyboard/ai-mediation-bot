@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -35,6 +36,24 @@ logger = logging.getLogger(__name__)
 
 _PLAN_SLOTS_ONCE = ("repayment_amount", "repayment_date")
 _QUESTION_ENDINGS = ("？", "?")
+_NORM_RE = re.compile(r"[\s，,。.！!？?；;：:、~\-—_]+")
+
+
+def _norm(text: str) -> str:
+    """归一化用于复读比对：去标点/空白，保留语义字符。"""
+    return _NORM_RE.sub("", str(text or ""))
+
+
+def _is_dup(candidate: str, refs) -> bool:
+    """candidate 与任一 ref 归一化后相等或互为子串，视为复读。"""
+    nc = _norm(candidate)
+    if not nc:
+        return False
+    for ref in refs:
+        nr = _norm(ref)
+        if nr and (nc == nr or nc in nr or nr in nc):
+            return True
+    return False
 
 
 @dataclass
@@ -279,12 +298,33 @@ class DialogOrchestrator:
                 return str(text)
         return ""
 
+    @staticmethod
+    def _strip_overlap_prefix(reply: str, last: str) -> str:
+        """若 reply 归一化后以 last 为前缀，剥去重复前缀，仅保留新增尾段。"""
+        nlast, nreply = _norm(last), _norm(reply)
+        if not nlast or not nreply.startswith(nlast):
+            return ""
+        consumed, cut = 0, 0
+        for i, ch in enumerate(reply):
+            if _norm(ch):
+                consumed += 1
+            if consumed >= len(nlast):
+                cut = i + 1
+                break
+        return reply[cut:].lstrip("，,。.；;！!？? ")
+
     def _avoid_repeat(self, reply: str, segments: list[str],
                       state: CallState) -> tuple[str, list[str]]:
-        """同一通电话连续两轮不原样复读同一句。"""
-        if not reply or reply != self._last_bot(state):
+        """同一通电话连续两轮不原样复读同一句（归一化比对，跨标点/空白）。"""
+        last = self._last_bot(state)
+        if not reply or not last or not _is_dup(reply, [last]):
             return reply, segments
-        text = sanitize_tts(f"我换个问法，{reply}")
+        tail = self._strip_overlap_prefix(reply, last)
+        if tail and _norm(tail) != _norm(reply):
+            text = sanitize_tts(tail)
+            return text, [text]
+        logger.info("avoid_repeat compressed call=%s", state.call_id)
+        text = sanitize_tts("我这边再补充一句，请您看是否方便回应一下。")
         return text, [text]
 
     # ---------- 方案确认（含金额合理性复核） ----------
@@ -390,7 +430,7 @@ class DialogOrchestrator:
             if nid == TERMINAL_END:
                 if primary_tpl_id not in snap.no_end_append:
                     end_txt = self._tpl(snap, "TPL_END_001", ctx, state)
-                    if end_txt and (not segments or end_txt not in segments[-1]):
+                    if end_txt and not _is_dup(end_txt, segments):
                         segments.append(end_txt)
                 end = True
                 break
@@ -408,7 +448,7 @@ class DialogOrchestrator:
                 node = nxt
                 continue
             entry = self._entry(snap, nxt, ctx, state)
-            if entry:
+            if entry and not _is_dup(entry, segments):
                 segments.append(entry)
             node = nxt
         return node, end, transfer
@@ -428,11 +468,10 @@ class DialogOrchestrator:
             if out and len(out) >= 4:
                 metrics.LLM_CALLS.labels(outcome="ok").inc()
                 entry = self._entry(snap, node, ctx, state)
-                if entry and not out.rstrip().endswith(_QUESTION_ENDINGS):
-                    compact_out = "".join(out.split())
-                    compact_entry = "".join(entry.split())
-                    if compact_entry not in compact_out:
-                        out = out + entry   # 拉回节点主问句
+                last_bot = self._last_bot(state)
+                if (entry and not out.rstrip().endswith(_QUESTION_ENDINGS)
+                        and not _is_dup(entry, [out, last_bot])):
+                    out = out + entry   # 拉回节点主问句
                 return out
             metrics.LLM_CALLS.labels(outcome="fallback").inc()
         except Exception:
@@ -468,4 +507,8 @@ class DialogOrchestrator:
 
         retry = self._tpl(snap, "TPL_RETRY_001", ctx, state)
         entry = self._entry(snap, node, ctx, state)
+        last_bot = self._last_bot(state)
+        # 用户刚听过节点主问句：仅给出转折提示，避免连续两轮原样复读
+        if entry and last_bot and _is_dup(entry, [last_bot]):
+            return [retry], node, False, False, False
         return [(retry + entry) if entry else retry], node, False, False, False
