@@ -199,6 +199,15 @@ class DialogOrchestrator:
 
         # ---- 1. 意图分类（内含否定语境检测）----
         cls = await self.classifier.classify(snap, node_before, user_text, state.history)
+        # 防御：身份已确认后，禁止 LLM 兜底再把意图翻成 NOT_SELF——
+        # 这是 CR005 误伤已确认本人金额复述的上游根因。
+        if (cls.intent == "NOT_SELF" and cls.source == "llm"
+                and state.slots.get("identity_confirmed")):
+            logger.info(
+                "classifier override call=%s drop_llm_not_self identity_confirmed=True text=%r",
+                state.call_id, _preview(user_text),
+            )
+            cls.intent, cls.confidence, cls.source = "UNKNOWN", 0.3, "guard"
         t1 = _now_ms()
 
         # ---- 2. 抽取槽位写入（标签效应槽在路由匹配后写入：

@@ -232,6 +232,54 @@ async def test_llm_classifier_returns_invalid_intent_falls_through_to_unknown():
     assert r.intent in ("UNKNOWN", "AFFIRM", "DENY")
 
 
+# ================= CR005 不得误伤已确认本人金额复述 =================
+async def test_compliance_does_not_redact_amount_after_identity_confirmed():
+    """生产事故复现：状态里同时有 identity_confirmed=True 和 not_self=True 时，
+    方案确认句"我跟您确认一下，您是希望分3期、每期3000元处理，对吗？"不得被 CR005 吞掉。"""
+    cache = KnowledgeCache(); cache.load_from_seed()
+    snap = cache.snap()
+    engine = ComplianceEngine()
+    slots = {"identity_confirmed": True, "not_self": True,
+             "installment_count": 3, "installment_amount": 3000.0}
+    text = "我跟您确认一下，您是希望分3期、每期3000元处理，对吗？"
+    res = engine.check(snap, text, slots, dict(DEMO_CASE))
+    assert res.passed is True
+    assert "为保护隐私" not in res.text
+    assert "3000" in res.text and "3期" in res.text
+
+
+async def test_confirm_self_clears_stale_not_self_slot():
+    """CONFIRM_SELF 命中后必须同时把 not_self 拉回 False，避免后续 CR005 误伤。"""
+    orch = make_orchestrator(FakeLLM())
+    state, _ = await new_call(orch)
+    state.slots["not_self"] = True  # 模拟早先误判残留
+    await orch.handle_turn(state, "是我，什么事？")
+    assert state.slots.get("identity_confirmed") is True
+    assert state.slots.get("not_self") is False
+
+
+async def test_llm_classifier_cannot_flip_confirmed_identity_to_not_self():
+    """身份已确认后，LLM 兜底分类即便返回 NOT_SELF 也应被门控降级，不污染 not_self 槽位。"""
+
+    class FlipFlopLLM:
+        async def complete_short(self, messages, max_tokens=40, timeout_ms=None):
+            return '{"intent":"NOT_SELF","confidence":0.9}'
+
+        async def short_reply(self, messages, max_chars=None):
+            return None
+
+    settings = get_settings()
+    cache = KnowledgeCache(); cache.load_from_seed()
+    classifier = IntentClassifier(settings, http=None, llm=FlipFlopLLM())
+    orch = DialogOrchestrator(cache, classifier, FlipFlopLLM(), ComplianceEngine(), settings)
+    state, _ = await new_call(orch, call_id="C_GUARD")
+    state.slots["identity_confirmed"] = True
+    # 一个关键词无法识别的尾部表达 → 触发 LLM 兜底
+    r = await orch.handle_turn(state, "啦啦啦啦啦啦啦")
+    assert r.intent != "NOT_SELF"
+    assert state.slots.get("not_self") is not True
+
+
 async def test_freeform_fallback_with_llm():
     llm = FakeLLM(replies=["这个我帮您记下来了。"])
     orch = make_orchestrator(llm)

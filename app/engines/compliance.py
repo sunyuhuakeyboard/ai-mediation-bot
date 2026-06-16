@@ -30,7 +30,9 @@ class ComplianceEngine:
         out = text or ""
         violations: list[dict] = []
         identity = bool(slots.get("identity_confirmed"))
-        third_party = bool(slots.get("not_self"))
+        # 已确认本人时不再当第三方处理：避免上一轮 NOT_SELF 误判残留触发 CR005，
+        # 把已经过方案确认门控的金额复述吞成"为保护隐私我不便说明具体内容"。
+        third_party = bool(slots.get("not_self")) and not identity
 
         # ---- 动态隐私规则 ----
         for rule in snap.compliance_dynamic:

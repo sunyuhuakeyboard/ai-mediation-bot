@@ -246,8 +246,10 @@ NODE_POLAR_MAP = {
 }
 
 # 标签命中后自动写入的槽位（与02表"业务结果"字段一致）
+# CONFIRM_SELF 必须同时把 not_self 拉回 False：否则之前误判的 not_self=True 会一直留存，
+# 让 CR005 在用户已确认身份后还把含金额的复述吞成"为保护隐私我不便说明具体内容"。
 LABEL_SLOT_EFFECTS = {
-    "CONFIRM_SELF": {"identity_confirmed": True},
+    "CONFIRM_SELF": {"identity_confirmed": True, "not_self": False},
     "NOT_SELF": {"not_self": True},
     "ACCEPT_MEDIATION": {"willingness": True, "mediation_willingness": "愿意"},
     "REFUSE_MEDIATION": {"willingness": False, "mediation_willingness": "拒绝"},
