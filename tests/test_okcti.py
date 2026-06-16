@@ -135,6 +135,43 @@ def test_okcti_n005_recovery_when_user_clarifies_identity():
         assert s2["ended"] is False
 
 
+def test_okcti_short_reply_emits_no_msg_events():
+    """50 字以内的回复必须整体放入 cmdcontent，不产生 msg 事件。
+    避免 OKCTI 把 cmdcontent + msg 当两段 TTS 接连播放，造成"每句话说两遍"。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_SR", "START"))
+        resp = client.post("/ivr/okcti/welcome/stream",
+                           json=_payload("OKCTI_SR", "QA", "我是本人"))
+        body = resp.text
+        # 整段 chained reply (案件告知+通知确认 50 字) 应整体放 cmdcontent
+        assert "event:msg" not in body
+        assert "请问您之前有收到过" in body  # 通知确认问句仍要送达，只是在 cmdcontent 里
+        assert "民事调解事项" in body
+
+
+def test_okcti_silence_prompt_does_not_re_ask_node_question():
+    """用户静音时仅发送"您还在吗"类短句，不再追加节点主问句，避免听感重复。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_SIL", "START"))
+        client.post("/ivr/okcti/welcome/stream",
+                    json=_payload("OKCTI_SIL", "QA", "我是本人"))
+        client.post("/ivr/okcti/welcome/stream",
+                    json=_payload("OKCTI_SIL", "QA", "收到过短信"))
+        # 触发静音兜底（usrtype=9 + 无 usrcontent）
+        silent = _payload("OKCTI_SIL", "QA", "")
+        silent["usrtype"] = 9
+        resp = client.post("/ivr/okcti/welcome/stream", json=silent)
+        body = resp.text
+        # 不复读"调解是自愿..."类节点主问句
+        assert "调解是自愿" not in body
+        # 但仍应给出短的回探
+        assert any(kw in body for kw in ("您慢慢说", "您还在", "听到您说话"))
+        # 状态不变
+        state = client.get("/api/v1/calls/OKCTI_SIL/state").json()
+        assert state["current_node"] == "N009"
+        assert state["ended"] is False
+
+
 def test_okcti_end_returns_minimal_ivr_with_grade():
     with _client() as client:
         client.post("/ivr/okcti/welcome", json=_payload("OKCTI_T3", "START"))

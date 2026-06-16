@@ -72,7 +72,7 @@ class Settings(BaseSettings):
     okcti_force_start: bool = True          # CTI平台通常已完成外呼策略控制；联调默认不二次拦截
     okcti_transfer_skill: str = "人工坐席"
     okcti_tts_spk_name: str = ""
-    okcti_msg_chunk_chars: int = 80
+    okcti_msg_chunk_chars: int = 200    # 投递切分阈值：≤该值不分段，避免 IVR 重复播报
     okcti_voice_allow_stop: int = 1
     okcti_voice_block_time: int = 0
     okcti_voice_timeout: int = 0

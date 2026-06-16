@@ -190,9 +190,15 @@ def _split_text(text: str, limit: int) -> list[str]:
 
 
 def _segments(reply: str, segments: list[str], chunk_chars: int) -> list[str]:
+    """把 bot 回复打包成 OKCTI 投递单元。短回复整体作为单段：
+    避免 OKCTI 把 cmdcontent + msg 当成两段 TTS 接连播放，
+    在某些 TTS 引擎上会被听成"每句话说两遍"。"""
     raw = [s.strip() for s in (segments or []) if s and s.strip()]
     if not raw:
         raw = _split_text(reply, chunk_chars)
+    combined = "".join(raw)
+    if combined and len(combined) <= chunk_chars:
+        return [combined]
     out: list[str] = []
     for item in raw:
         out.extend(_split_text(item, chunk_chars))

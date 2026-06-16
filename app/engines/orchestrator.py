@@ -361,26 +361,23 @@ class DialogOrchestrator:
 
     def _silence_prompt(self, state: CallState, snap, node_before: str,
                         t0: float) -> "TurnResult":
-        """ASR 无有效内容时，温和回探并停在原节点，绝不推进路由/槽位。"""
-        ctx = self._ctx(state)
-        node = snap.nodes.get(node_before) or snap.nodes[TERMINAL_END]
-        entry = self._entry(snap, node, ctx, state)
+        """ASR 无有效内容时，温和回探并停在原节点，绝不复读上一轮主问句。
+
+        用户上一轮已经听过节点主问句，再追加同义问句会被听成"每句话说两遍"，
+        所以静音兜底只发一句邀请用户回应的短语，节点/槽位/retry 保持不动。
+        """
         recent = self._recent_bots(state, n=3)
         preface = next((p for p in self._SILENCE_PROMPTS if not _is_dup(p, recent)),
                        self._SILENCE_PROMPTS[0])
-        segments = [preface]
-        if entry and not _is_dup(entry, [preface, *recent]):
-            segments.append(entry)
-        reply = sanitize_tts(self._collapse_self_repeat("".join(segments)))
+        reply = sanitize_tts(preface)
         state.remember("bot", reply)
         logger.info(
-            "dialog turn silence call=%s node=%s preface=%r entry=%r reply=%r",
-            state.call_id, node_before, _preview(preface),
-            _preview(entry), _preview(reply),
+            "dialog turn silence call=%s node=%s preface=%r reply=%r",
+            state.call_id, node_before, _preview(preface), _preview(reply),
         )
         metrics.TURNS_TOTAL.labels(action="SILENCE_PROMPT").inc()
         return TurnResult(
-            call_id=state.call_id, reply=reply, segments=segments,
+            call_id=state.call_id, reply=reply, segments=[reply],
             action_type="SILENCE_PROMPT", node_before=node_before,
             node_after=node_before, slots=dict(state.slots),
             latency_ms={"total": int(_now_ms() - t0)},
