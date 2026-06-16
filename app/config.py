@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     # ---- LLM（OpenAI 兼容接口：Doubao方舟 / Qwen DashScope / DeepSeek / vLLM 均可）----
     llm_base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     llm_api_key: str = ""
-    llm_model: str = "doubao-pro-32k"
+    llm_model: str = "doubao-seed-2-0-mini-260428"
     llm_temperature: float = 0.3
     llm_max_tokens: int = 60
     llm_connect_timeout_ms: int = 300

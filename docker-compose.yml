@@ -30,7 +30,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       LLM_BASE_URL: ${LLM_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
       LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-doubao-pro-32k}
+      LLM_MODEL: ${LLM_MODEL:-doubao-seed-2-0-mini-260428}
     ports:
       - "8000:8000"
     depends_on:

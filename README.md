@@ -108,6 +108,9 @@ curl -s -X POST localhost:8000/api/v1/calls/CALL.../end -d '{}'
 
 ```bash
 cp .env.example .env          # 填入 LLM_API_KEY（豆包/Qwen/DeepSeek 任一OpenAI兼容端点）
+# 火山方舟豆包推荐配置：
+# LLM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+# LLM_MODEL=doubao-seed-2-0-mini-260428
 docker compose up -d --build
 ```
 
