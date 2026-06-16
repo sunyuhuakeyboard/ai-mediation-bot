@@ -69,7 +69,11 @@ class LLMClient:
                             return sanitize_tts(text) or None
         except asyncio.CancelledError:
             raise
-        except (TimeoutError, httpx.HTTPError) as exc:
+        except TimeoutError:
+            text, done = first_sentence_cut(buf, max_chars)
+            logger.warning("llm degraded (TimeoutError), partial=%r", buf[:20])
+            return (sanitize_tts(text) if done else None) or None
+        except httpx.HTTPError as exc:
             logger.warning("llm degraded (%s), partial=%r", type(exc).__name__, buf[:20])
         except Exception:
             logger.exception("llm unexpected error")

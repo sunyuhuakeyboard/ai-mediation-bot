@@ -186,7 +186,8 @@ async def test_fallback_retry_then_jump():
     orch = make_orchestrator(FakeLLM())
     state, _ = await new_call(orch)
     r1 = await orch.handle_turn(state, "呜啦呜啦巴拉巴拉")
-    assert r1.action_type == "FALLBACK" and "没有听清" in r1.reply
+    assert r1.action_type == "FALLBACK" and "再确认" in r1.reply
+    assert "抱歉" not in r1.reply
     assert state.current_node == "N002"
     r2 = await orch.handle_turn(state, "叽里咕噜")
     assert state.current_node == "N002"

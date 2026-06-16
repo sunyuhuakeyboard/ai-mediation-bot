@@ -34,6 +34,7 @@ from app.utils.text import render, sanitize_tts, strip_unfilled
 logger = logging.getLogger(__name__)
 
 _PLAN_SLOTS_ONCE = ("repayment_amount", "repayment_date")
+_QUESTION_ENDINGS = ("？", "?")
 
 
 @dataclass
@@ -200,6 +201,7 @@ class DialogOrchestrator:
                 metrics.COMPLIANCE_HITS.labels(rule_id=v["rule_id"]).inc()
             logger.warning("compliance repaired call=%s rules=%s",
                            state.call_id, [v["rule_id"] for v in comp.violations])
+        reply, segments = self._avoid_repeat(reply, segments, state)
         t4 = _now_ms()
 
         # ---- 5. 状态推进 ----
@@ -269,6 +271,21 @@ class DialogOrchestrator:
 
     def _entry(self, snap, node: dict, ctx: dict, state: CallState | None = None) -> str:
         return self._tpl(snap, node.get("entry_template_id"), ctx, state)
+
+    @staticmethod
+    def _last_bot(state: CallState) -> str:
+        for role, text in reversed(state.history or []):
+            if role == "bot" and text:
+                return str(text)
+        return ""
+
+    def _avoid_repeat(self, reply: str, segments: list[str],
+                      state: CallState) -> tuple[str, list[str]]:
+        """同一通电话连续两轮不原样复读同一句。"""
+        if not reply or reply != self._last_bot(state):
+            return reply, segments
+        text = sanitize_tts(f"我换个问法，{reply}")
+        return text, [text]
 
     # ---------- 方案确认（含金额合理性复核） ----------
     def _amount_anomaly(self, state: CallState) -> str | None:
@@ -410,8 +427,12 @@ class DialogOrchestrator:
             out = await self.llm.short_reply(msgs)
             if out and len(out) >= 4:
                 metrics.LLM_CALLS.labels(outcome="ok").inc()
-                if not out.rstrip().endswith(("？", "?")):
-                    out = out + self._entry(snap, node, ctx, state)   # 拉回节点主问句
+                entry = self._entry(snap, node, ctx, state)
+                if entry and not out.rstrip().endswith(_QUESTION_ENDINGS):
+                    compact_out = "".join(out.split())
+                    compact_entry = "".join(entry.split())
+                    if compact_entry not in compact_out:
+                        out = out + entry   # 拉回节点主问句
                 return out
             metrics.LLM_CALLS.labels(outcome="fallback").inc()
         except Exception:

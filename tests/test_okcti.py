@@ -69,6 +69,27 @@ def test_okcti_qa_uses_existing_dialog_state():
         assert "橘子分期" in resp.text
 
 
+def test_okcti_duplicate_qa_does_not_advance_state_twice():
+    with _client() as client:
+        client.post("/ivr/okcti/welcome", json=_payload("OKCTI_DUP", "START"))
+        payload = _payload("OKCTI_DUP", "QA", "是我，什么事")
+        payload["logid"] = "LOG_DUP_001"
+
+        first = client.post("/ivr/okcti/welcome/stream", json=payload)
+        second = client.post("/ivr/okcti/welcome/stream", json=payload)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert second.text == first.text
+
+        state = client.get("/api/v1/calls/OKCTI_DUP/state").json()
+        assert state["current_node"] == "N007"
+        assert state["turn_index"] == 1
+
+        transcript = client.get("/api/v1/calls/OKCTI_DUP/transcript").json()
+        assert [t["user_text"] for t in transcript["turns"]] == [None, "是我，什么事"]
+
+
 def test_okcti_end_returns_minimal_ivr_with_grade():
     with _client() as client:
         client.post("/ivr/okcti/welcome", json=_payload("OKCTI_T3", "START"))

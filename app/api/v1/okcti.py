@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 from collections.abc import AsyncIterator
 from typing import Any
@@ -17,10 +18,12 @@ from fastapi.responses import StreamingResponse
 
 from app.api.deps import get_call_service, get_orchestrator, get_quality_service
 from app.config import Settings
+from app.engines.orchestrator import TurnResult
 from app.schemas.okcti import OkctiRequest
 from app.services.call_service import CallBlocked
 
 router = APIRouter(prefix="/ivr/okcti", tags=["okcti"])
+logger = logging.getLogger(__name__)
 
 END_MARK = "[E-N=D]"
 EVENT_IVR = "ivr"
@@ -57,6 +60,48 @@ def _voice_interaction(s: Settings) -> dict:
         "voiceminspeak": s.okcti_voice_min_speak,
         "voiceminpause": s.okcti_voice_min_pause,
     }
+
+
+def _last_bot_text(state) -> str:
+    for role, text in reversed(state.history or []):
+        if role == "bot" and text:
+            return str(text)
+    return ""
+
+
+def _request_key(req: OkctiRequest) -> str:
+    """OKCTI 可能重试同一轮 POST；用稳定字段生成幂等指纹。"""
+    payload = {
+        "type": req.type.upper(),
+        "usrtype": req.usrtype,
+        "usrcontent": (req.usrcontent or "").strip(),
+        "usrrecurl": req.usrrecurl or "",
+        "logid": req.logid or "",
+        "taskid": req.taskid or "",
+        "calltaskid": req.calltaskid or "",
+        "talktimelong": req.talktimelong,
+        "callresult": req.callresult,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _cached_response(state, key: str) -> tuple[dict, list[dict]] | None:
+    if state is None or state.okcti_last_request_key != key:
+        return None
+    cached = state.okcti_last_response or {}
+    ivr = cached.get("ivr")
+    if not isinstance(ivr, dict):
+        return None
+    msgs = cached.get("msgs") or []
+    if not isinstance(msgs, list):
+        msgs = []
+    return ivr, msgs
+
+
+def _remember_response(state, key: str, ivr: dict, msgs: list[dict]) -> None:
+    state.okcti_last_request_key = key
+    state.okcti_last_response = {"ivr": ivr, "msgs": msgs}
 
 
 def _minimal_ivr(req: OkctiRequest, *, grade: str = "", nodelabel: str = "",
@@ -238,9 +283,16 @@ def _check_auth(s: Settings, x_request_id: str | None, x_app_id: str | None,
 async def _handle_start(req: OkctiRequest, calls, orchestrator, s: Settings):
     existing = await calls.load(req.callid)
     if existing is not None:
-        opening = await orchestrator.opening(existing)
-        await calls.save_state(existing)
-        return opening
+        reply = _last_bot_text(existing)
+        if not reply:
+            opening = await orchestrator.opening(existing)
+            await calls.save_state(existing)
+            return opening, existing
+        return TurnResult(call_id=existing.call_id, reply=reply, segments=[reply],
+                          action_type="START_DUPLICATE",
+                          node_before=existing.current_node,
+                          node_after=existing.current_node,
+                          slots=dict(existing.slots)), existing
     case = await _case_from_request(req, calls)
     try:
         state = await calls.start_call(case, call_id=req.callid, force=s.okcti_force_start)
@@ -249,7 +301,7 @@ async def _handle_start(req: OkctiRequest, calls, orchestrator, s: Settings):
     opening = await orchestrator.opening(state)
     await calls.save_state(state)
     calls.persist_turn(state, opening, user_text=None)
-    return opening
+    return opening, state
 
 
 async def _handle_qa(req: OkctiRequest, calls, orchestrator, s: Settings):
@@ -261,7 +313,7 @@ async def _handle_qa(req: OkctiRequest, calls, orchestrator, s: Settings):
     result = await orchestrator.handle_turn(state, _user_text(req))
     await calls.save_state(state)
     calls.persist_turn(state, result, req.usrcontent)
-    return result
+    return result, state
 
 
 async def _handle_leave(req: OkctiRequest, calls) -> dict:
@@ -285,12 +337,25 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
                         s: Settings) -> AsyncIterator[bytes]:
     charset = s.okcti_response_charset or "UTF-8"
     typ = req.type.upper()
+    request_key = _request_key(req)
+    state = await calls.load(req.callid)
+    cached = _cached_response(state, request_key)
+    if cached is not None:
+        logger.info("okcti duplicate request replayed call=%s type=%s logid=%s",
+                    req.callid, typ, req.logid or "")
+        ivr, msgs = cached
+        yield _event_bytes(EVENT_IVR, ivr, charset)
+        for msg in msgs:
+            yield _event_bytes(EVENT_MSG, msg, charset)
+        return
+
+    state_to_cache = None
 
     if typ == "START":
-        result = await _handle_start(req, calls, orchestrator, s)
+        result, state_to_cache = await _handle_start(req, calls, orchestrator, s)
         ivr, msgs = _ivr_from_turn(req, result, s)
     elif typ == "QA":
-        result = await _handle_qa(req, calls, orchestrator, s)
+        result, state_to_cache = await _handle_qa(req, calls, orchestrator, s)
         ivr, msgs = _ivr_from_turn(req, result, s)
     elif typ == "LEAVE":
         ivr, msgs = await _handle_leave(req, calls), []
@@ -310,6 +375,10 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
             "think": "unsupported type",
             "interaction": {},
         }, []
+
+    if state_to_cache is not None:
+        _remember_response(state_to_cache, request_key, ivr, msgs)
+        await calls.save_state(state_to_cache)
 
     yield _event_bytes(EVENT_IVR, ivr, charset)
     for msg in msgs:
