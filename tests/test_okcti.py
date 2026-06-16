@@ -149,6 +149,46 @@ def test_okcti_short_reply_emits_no_msg_events():
         assert "民事调解事项" in body
 
 
+def test_okcti_consecutive_silence_ends_call_gracefully():
+    """连续静音超过阈值即温和挂断，不再无限循环回探（避免被 IVR 自播放大成"每句两遍"）。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_QUIET", "START"))
+        silent = _payload("OKCTI_QUIET", "QA", "")
+        silent["usrtype"] = 9
+        # 前两轮静音仍是温和回探，未结束
+        for _ in range(2):
+            resp = client.post("/ivr/okcti/welcome/stream", json=silent)
+            assert resp.status_code == 200
+        s_mid = client.get("/api/v1/calls/OKCTI_QUIET/state").json()
+        assert s_mid["ended"] is False
+        # 第三轮静音超阈值：bot 优雅道别并挂断
+        resp = client.post("/ivr/okcti/welcome/stream", json=silent)
+        assert resp.status_code == 200
+        assert "不打扰" in resp.text or "再联系" in resp.text
+        assert "再见" in resp.text
+        s_end = client.get("/api/v1/calls/OKCTI_QUIET/state").json()
+        assert s_end["ended"] is True
+        assert s_end["call_result"] == "用户未回应"
+
+
+def test_okcti_real_input_resets_silence_count():
+    """真实输入到达后静音计数归零，避免误伤偶尔静音后又开口的用户。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_RESET", "START"))
+        silent = _payload("OKCTI_RESET", "QA", "")
+        silent["usrtype"] = 9
+        # 两次静音
+        client.post("/ivr/okcti/welcome/stream", json=silent)
+        client.post("/ivr/okcti/welcome/stream", json=silent)
+        # 真实回答
+        client.post("/ivr/okcti/welcome/stream",
+                    json=_payload("OKCTI_RESET", "QA", "我是本人"))
+        s = client.get("/api/v1/calls/OKCTI_RESET/state").json()
+        # 真实输入推进了节点，且 silence_count 已复位
+        assert s["current_node"] != "N002"
+        assert s["ended"] is False
+
+
 def test_okcti_silence_prompt_does_not_re_ask_node_question():
     """用户静音时仅发送"您还在吗"类短句，不再追加节点主问句，避免听感重复。"""
     with _client() as client:

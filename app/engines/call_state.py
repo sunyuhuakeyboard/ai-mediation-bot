@@ -24,6 +24,7 @@ class CallState:
     transfer_human: bool = False
     last_fragment: str | None = None                   # ASR碎片合并：上轮未命中文本
     variant_cursor: dict = field(default_factory=dict)  # 话术变体轮换游标
+    silence_count: int = 0                              # 连续静音/无效输入次数（触发优雅结束）
     okcti_last_request_key: str | None = None           # OKCTI 重试幂等：最近请求指纹
     okcti_last_response: dict = field(default_factory=dict)  # 最近一次 SSE 响应快照
 

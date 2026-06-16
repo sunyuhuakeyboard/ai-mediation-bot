@@ -73,11 +73,14 @@ class Settings(BaseSettings):
     okcti_transfer_skill: str = "人工坐席"
     okcti_tts_spk_name: str = ""
     okcti_msg_chunk_chars: int = 200    # 投递切分阈值：≤该值不分段，避免 IVR 重复播报
-    okcti_voice_allow_stop: int = 1
-    okcti_voice_block_time: int = 0
-    okcti_voice_timeout: int = 0
-    okcti_voice_min_speak: int = 0
-    okcti_voice_min_pause: int = 0
+    okcti_silence_max_turns: int = 2    # 连续静音超过该次数即优雅结束，避免 IVR 反复自播
+    # IVR 语音交互参数（毫秒）：全部为 0 时各厂商默认值不一致，最常见就是 IVR 自播 cmdcontent
+    # 一次形成"每句话说两遍"的听感。显式给出后由我方驱动节奏。
+    okcti_voice_allow_stop: int = 1     # 允许用户语音打断
+    okcti_voice_block_time: int = 500   # bot 播报开始 500ms 内屏蔽用户输入，避免噪声触发 ASR
+    okcti_voice_timeout: int = 6000     # 用户开口超时 6s，超时即由 OKCTI 发 usrtype=9，不要自播
+    okcti_voice_min_speak: int = 300    # 有效说话最少 300ms（过短当噪声丢弃）
+    okcti_voice_min_pause: int = 700    # 用户停顿 700ms 视为结束（中文口语典型值）
 
     # ---- 质检 ----
     latency_warn_ms: int = 1800                   # QC010: P95 响应阈值

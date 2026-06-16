@@ -190,6 +190,7 @@ class DialogOrchestrator:
         if not (user_text or "").strip():
             return self._silence_prompt(state, snap, node_before, t0)
 
+        state.silence_count = 0   # 真实输入：复位静音计数
         state.remember("user", user_text)
 
         # 用户明确要求停止联系 → 结束时进谢绝名单（外呼策略层强制生效）
@@ -361,19 +362,43 @@ class DialogOrchestrator:
 
     def _silence_prompt(self, state: CallState, snap, node_before: str,
                         t0: float) -> "TurnResult":
-        """ASR 无有效内容时，温和回探并停在原节点，绝不复读上一轮主问句。
+        """ASR 无有效内容时温和回探。
 
-        用户上一轮已经听过节点主问句，再追加同义问句会被听成"每句话说两遍"，
-        所以静音兜底只发一句邀请用户回应的短语，节点/槽位/retry 保持不动。
+        重要：每个 usrtype=9 都触发我们说话，会被 IVR 自播一次，听感是"每句话说两遍"。
+        所以连续静音超过阈值后直接挂断，避免无限循环骚扰用户。
         """
+        state.silence_count += 1
+        max_silence = max(1, int(self.s.okcti_silence_max_turns or 1))
+
+        # 超阈值：温和挂断，避免被 IVR 反复自播
+        if state.silence_count > max_silence:
+            reply = sanitize_tts(
+                "看您现在可能不太方便，那今天就先不打扰您了，后续我们再联系。再见。")
+            state.remember("bot", reply)
+            state.ended = True
+            state.call_result = state.call_result or "用户未回应"
+            logger.info(
+                "dialog turn silence_end call=%s node=%s silence_count=%s reply=%r",
+                state.call_id, node_before, state.silence_count, _preview(reply),
+            )
+            metrics.TURNS_TOTAL.labels(action="SILENCE_END").inc()
+            return TurnResult(
+                call_id=state.call_id, reply=reply, segments=[reply],
+                action_type="SILENCE_END", node_before=node_before,
+                node_after=node_before, slots=dict(state.slots),
+                end_call=True, call_result=state.call_result,
+                latency_ms={"total": int(_now_ms() - t0)},
+            )
+
         recent = self._recent_bots(state, n=3)
         preface = next((p for p in self._SILENCE_PROMPTS if not _is_dup(p, recent)),
                        self._SILENCE_PROMPTS[0])
         reply = sanitize_tts(preface)
         state.remember("bot", reply)
         logger.info(
-            "dialog turn silence call=%s node=%s preface=%r reply=%r",
-            state.call_id, node_before, _preview(preface), _preview(reply),
+            "dialog turn silence call=%s node=%s silence_count=%s preface=%r reply=%r",
+            state.call_id, node_before, state.silence_count,
+            _preview(preface), _preview(reply),
         )
         metrics.TURNS_TOTAL.labels(action="SILENCE_PROMPT").inc()
         return TurnResult(

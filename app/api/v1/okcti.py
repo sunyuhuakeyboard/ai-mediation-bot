@@ -439,8 +439,11 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
         bool(req.usrrecurl), req.talktimelong,
     )
     status = "ok"
+    # 无 ASR 输入的事件（usrtype=7/8/9，或 usrcontent 为空）每次都需推进静音计数，
+    # 不能被幂等缓存短路；只对有内容的真实回合启用 dedup。
+    can_dedup = bool((req.usrcontent or "").strip()) and req.usrtype not in (7, 8, 9)
     try:
-        cached = _cached_response(state, request_key)
+        cached = _cached_response(state, request_key) if can_dedup else None
         if cached is not None:
             ivr, msgs = cached
             logger.info(
@@ -481,7 +484,8 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
             }, []
 
         if state_to_cache is not None:
-            _remember_response(state_to_cache, request_key, ivr, msgs)
+            if can_dedup:
+                _remember_response(state_to_cache, request_key, ivr, msgs)
             await calls.save_state(state_to_cache)
 
         logger.info(
