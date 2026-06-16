@@ -317,6 +317,7 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
 
 
 @router.post("/welcome")
+@router.post("/welcome/stream")
 async def okcti_welcome(
     req: OkctiRequest,
     request: Request,

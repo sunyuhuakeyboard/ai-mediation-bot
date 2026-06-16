@@ -153,6 +153,13 @@ http://服务器IP:8000/ivr/okcti/welcome
 http://服务器IP:8000/api/v1/ivr/okcti/welcome
 ```
 
+如 OKCTI 平台固定追加 `/stream`，服务端也兼容以下路径：
+
+```text
+http://服务器IP:8000/ivr/okcti/welcome/stream
+http://服务器IP:8000/api/v1/ivr/okcti/welcome/stream
+```
+
 接口协议：
 
 - 请求：`POST` JSON，字段兼容 OKCTI 文档中的 `callid/caller/callee/direct/type/usrtype/usrcontent/...`
@@ -276,7 +283,9 @@ python -m pytest tests/ -v        # 端到端用例，离线运行
 | `PUT /admin/knowledge/{table}/{pk}` | 单条维护（话术/路由/策略/标签/节点） |
 | `POST /admin/knowledge/reload` | 重建快照并广播全副本 |
 | `POST /ivr/okcti/welcome` | OKCTI LLM-IVR SSE 兼容入口（root路径） |
+| `POST /ivr/okcti/welcome/stream` | OKCTI LLM-IVR SSE 兼容入口（兼容平台 stream 后缀） |
 | `POST /api/v1/ivr/okcti/welcome` | OKCTI LLM-IVR SSE 兼容入口（版本化路径） |
+| `POST /api/v1/ivr/okcti/welcome/stream` | OKCTI LLM-IVR SSE 兼容入口（版本化 stream 后缀） |
 
 WebSocket 协议示例：
 

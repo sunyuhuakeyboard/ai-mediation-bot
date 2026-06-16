@@ -47,6 +47,17 @@ def test_okcti_start_returns_sse_ivr():
         assert "请问您是张三本人吗" in resp.text
 
 
+def test_okcti_stream_alias_returns_sse_ivr():
+    with _client() as client:
+        resp = client.post("/ivr/okcti/welcome/stream",
+                           json=_payload("OKCTI_T1_STREAM", "START"))
+        assert resp.status_code == 200
+        assert "text/event-stream" in resp.headers["content-type"]
+        assert "event:ivr" in resp.text
+        assert "[E-N=D]" in resp.text
+        assert '"callid":"OKCTI_T1_STREAM"' in resp.text
+
+
 def test_okcti_qa_uses_existing_dialog_state():
     with _client() as client:
         client.post("/ivr/okcti/welcome", json=_payload("OKCTI_T2", "START"))
