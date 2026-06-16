@@ -186,8 +186,10 @@ async def test_fallback_retry_then_jump():
     orch = make_orchestrator(FakeLLM())
     state, _ = await new_call(orch)
     r1 = await orch.handle_turn(state, "呜啦呜啦巴拉巴拉")
-    assert r1.action_type == "FALLBACK" and "再确认" in r1.reply
-    assert "抱歉" not in r1.reply
+    assert r1.action_type == "FALLBACK"
+    # 邀请用户直说，但不应再带"没有听清/抱歉/再确认"等暗示未识别的措辞
+    assert any(kw in r1.reply for kw in ("您直说", "您说说", "告诉我", "您看怎么处理"))
+    assert "抱歉" not in r1.reply and "没有听清" not in r1.reply and "再确认" not in r1.reply
     assert state.current_node == "N002"
     r2 = await orch.handle_turn(state, "叽里咕噜")
     assert state.current_node == "N002"
@@ -216,8 +218,8 @@ async def test_fallback_skips_entry_when_user_just_heard_it():
     # 开场已经播报 N002 主问句"请问您是张三本人吗？"
     r1 = await orch.handle_turn(state, "呜啦呜啦巴拉巴拉")
     assert r1.action_type == "FALLBACK"
-    # 仍需给出转折提示，让用户知道"未听清"
-    assert any(kw in r1.reply for kw in ("再确认", "回到当前问题", "换个方式", "再对一下"))
+    # 给出邀请用户直说的转折提示，且不暗示"未识别"
+    assert any(kw in r1.reply for kw in ("您直说", "您说说", "告诉我", "您看怎么处理"))
     # 主问句不应在 fallback 中再次播报
     assert "请问您是" not in r1.reply
 

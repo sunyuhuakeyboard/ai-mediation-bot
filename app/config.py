@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     llm_first_token_timeout_ms: int = 1500        # 首token超时：连接成功但首字符迟迟不到 → 立即兜底
     llm_total_timeout_ms: int = 3000              # 总预算：首token到首句结束；超时仍尝试落地部分输出
     llm_disable_thinking: bool = True             # 关闭思考模式：短回复无需推理，降低首token延迟
+    llm_classifier_enabled: bool = True           # 关键词分类返回 UNKNOWN 时，让 LLM 兜底打标签
+    llm_classifier_timeout_ms: int = 1200         # LLM 意图分类预算：超时即降级为 UNKNOWN
     reply_max_chars: int = 48                     # 单句输出上限（约束"不超过30字"留余量）
 
     # 金额/时间复述强制走模板渲染（零幻觉），不交给LLM改写

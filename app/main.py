@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI):
         if llm is None:
             logger.warning("LLM_API_KEY 未配置：LLM_SHORT_REPLY 将全部回退参考话术模板")
 
-    classifier = IntentClassifier(s, http=classifier_http)
+    classifier = IntentClassifier(s, http=classifier_http, llm=llm)
     compliance = ComplianceEngine()
     orchestrator = DialogOrchestrator(cache, classifier, llm, compliance, s)
     quality = QualityService(s, call_service, cache, llm=llm)

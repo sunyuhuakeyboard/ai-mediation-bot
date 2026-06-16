@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
 
 import httpx
 import orjson
@@ -17,6 +19,22 @@ from app.config import Settings
 from app.utils.text import first_sentence_cut, sanitize_tts
 
 logger = logging.getLogger(__name__)
+LOG_TEXT_LIMIT = 120
+
+
+def _preview(text, limit: int = LOG_TEXT_LIMIT) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _messages_summary(messages: list[dict]) -> list[dict]:
+    out = []
+    for msg in messages or []:
+        content = msg.get("content") or ""
+        out.append({"role": msg.get("role"), "chars": len(str(content))})
+    return out
 
 
 class LLMClient:
@@ -35,6 +53,7 @@ class LLMClient:
 
     async def short_reply(self, messages: list[dict], max_chars: int | None = None) -> str | None:
         """流式生成一句话；失败/超时尝试落地部分输出，否则返回 None（调用方回退模板）。"""
+        started = time.perf_counter()
         max_chars = max_chars or self.s.reply_max_chars
         payload = {
             "model": self.s.llm_model,
@@ -50,15 +69,26 @@ class LLMClient:
         loop = asyncio.get_event_loop()
         deadline = loop.time() + self.s.llm_total_timeout_ms / 1000
         first_token_deadline = loop.time() + self.s.llm_first_token_timeout_ms / 1000
+        first_token_ms: int | None = None
+        logger.info(
+            "llm short_reply start model=%s max_chars=%s max_tokens=%s temperature=%s "
+            "total_timeout_ms=%s first_token_timeout_ms=%s messages=%s",
+            self.s.llm_model, max_chars, self.s.llm_max_tokens, self.s.llm_temperature,
+            self.s.llm_total_timeout_ms, self.s.llm_first_token_timeout_ms,
+            _messages_summary(messages),
+        )
         try:
             async with asyncio.timeout_at(deadline):
                 async with self.client.stream("POST", "/chat/completions", json=payload) as resp:
                     if resp.status_code != 200:
-                        logger.warning("llm http %s", resp.status_code)
+                        elapsed = int((time.perf_counter() - started) * 1000)
+                        logger.warning("llm http status=%s elapsed_ms=%s",
+                                       resp.status_code, elapsed)
                         return None
                     async for line in resp.aiter_lines():
                         if not buf and loop.time() > first_token_deadline:
-                            logger.warning("llm first-token timeout")
+                            elapsed = int((time.perf_counter() - started) * 1000)
+                            logger.warning("llm first-token timeout elapsed_ms=%s", elapsed)
                             return None
                         if not line or not line.startswith("data:"):
                             continue
@@ -72,22 +102,55 @@ class LLMClient:
                             continue
                         if not delta:
                             continue
+                        if first_token_ms is None:
+                            first_token_ms = int((time.perf_counter() - started) * 1000)
                         buf += delta
                         text, done = first_sentence_cut(buf, max_chars)
                         if done:
-                            return sanitize_tts(text) or None
+                            out = sanitize_tts(text) or None
+                            elapsed = int((time.perf_counter() - started) * 1000)
+                            logger.info(
+                                "llm short_reply done reason=first_sentence elapsed_ms=%s "
+                                "first_token_ms=%s raw_len=%s out_len=%s out=%r",
+                                elapsed, first_token_ms, len(buf), len(out or ""),
+                                _preview(out),
+                            )
+                            return out
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            logger.warning("llm degraded (TimeoutError), partial=%r", buf[:20])
-            return self._salvage_partial(buf, max_chars)
+            elapsed = int((time.perf_counter() - started) * 1000)
+            out = self._salvage_partial(buf, max_chars)
+            logger.warning(
+                "llm degraded type=TimeoutError elapsed_ms=%s first_token_ms=%s "
+                "partial_len=%s partial=%r salvage_len=%s salvage=%r",
+                elapsed, first_token_ms, len(buf), _preview(buf), len(out or ""),
+                _preview(out),
+            )
+            return out
         except httpx.HTTPError as exc:
-            logger.warning("llm degraded (%s), partial=%r", type(exc).__name__, buf[:20])
-            return self._salvage_partial(buf, max_chars)
+            elapsed = int((time.perf_counter() - started) * 1000)
+            out = self._salvage_partial(buf, max_chars)
+            logger.warning(
+                "llm degraded type=%s elapsed_ms=%s first_token_ms=%s partial_len=%s "
+                "partial=%r salvage_len=%s salvage=%r",
+                type(exc).__name__, elapsed, first_token_ms, len(buf), _preview(buf),
+                len(out or ""), _preview(out),
+            )
+            return out
         except Exception:
-            logger.exception("llm unexpected error")
+            elapsed = int((time.perf_counter() - started) * 1000)
+            logger.exception("llm unexpected error elapsed_ms=%s partial_len=%s partial=%r",
+                             elapsed, len(buf), _preview(buf))
             return None
-        return sanitize_tts(buf) or None
+        out = sanitize_tts(buf) or None
+        elapsed = int((time.perf_counter() - started) * 1000)
+        logger.info(
+            "llm short_reply done reason=stream_end elapsed_ms=%s first_token_ms=%s "
+            "raw_len=%s out_len=%s out=%r",
+            elapsed, first_token_ms, len(buf), len(out or ""), _preview(out),
+        )
+        return out
 
     @staticmethod
     def _salvage_partial(buf: str, max_chars: int) -> str | None:
@@ -100,6 +163,31 @@ class LLMClient:
         if len(buf.strip()) >= 8:
             return sanitize_tts(buf.rstrip("，,、 ") + "。") or None
         return None
+
+    async def complete_short(self, messages: list[dict], *, max_tokens: int = 40,
+                             timeout_ms: int | None = None) -> str | None:
+        """非流式短补全，不过 TTS 清洗。用于分类/JSON 输出场景。"""
+        budget = (timeout_ms or self.s.llm_classifier_timeout_ms) / 1000
+        payload = {
+            "model": self.s.llm_model, "messages": messages,
+            "temperature": 0.0, "max_tokens": max_tokens,
+        }
+        if self.s.llm_disable_thinking:
+            payload["thinking"] = {"type": "disabled"}
+        try:
+            async with asyncio.timeout(budget):
+                resp = await self.client.post("/chat/completions", json=payload)
+                if resp.status_code != 200:
+                    return None
+                return resp.json()["choices"][0]["message"]["content"]
+        except asyncio.CancelledError:
+            raise
+        except (TimeoutError, httpx.HTTPError) as exc:
+            logger.warning("llm complete_short degraded (%s)", type(exc).__name__)
+            return None
+        except Exception:
+            logger.exception("llm complete_short unexpected error")
+            return None
 
     async def complete(self, messages: list[dict], max_tokens: int = 300,
                        temperature: float = 0.0) -> str | None:

@@ -122,6 +122,62 @@ async def test_asr_fragment_merge():
 
 
 # ================= UNKNOWN长尾：受限LLM应答 =================
+# ================= LLM 兜底意图分类 =================
+async def test_llm_classifier_promotes_unknown_to_known_intent():
+    """关键词分类返回 UNKNOWN 时，由 LLM 兜底打标签，路由命中而非进入 fallback。"""
+
+    class StubLLM:
+        def __init__(self):
+            self.last_prompt = ""
+
+        async def complete_short(self, messages, max_tokens=40, timeout_ms=None):
+            self.last_prompt = messages[-1]["content"]
+            return '{"intent":"ALREADY_PAID","confidence":0.9}'
+
+        async def short_reply(self, messages, max_chars=None):
+            return None
+
+    settings = get_settings()
+    cache = KnowledgeCache(); cache.load_from_seed()
+    llm = StubLLM()
+    classifier = IntentClassifier(settings, http=None, llm=llm)
+    orch = DialogOrchestrator(cache, classifier, llm, ComplianceEngine(), settings)
+    state, _ = await new_call(orch, call_id="C_LLMCLS")
+    await orch.handle_turn(state, "我是")
+    await orch.handle_turn(state, "收到了")  # 进 N009
+
+    # 这种偏口语化的表达，关键词规则容易漏识；让 LLM 兜底打成 ALREADY_PAID
+    r = await orch.handle_turn(state, "之前那笔钱我前阵子已经处理过了")
+    assert r.intent == "ALREADY_PAID"
+    assert r.action_type != "FALLBACK"
+    assert "您直说" not in r.reply  # 不再走 fallback 模板
+    assert "凭证" in r.reply or "核实" in r.reply  # 命中 TPL_PAID_001
+    # 提示词应包含候选标签与当前节点上下文
+    assert "ALREADY_PAID" in llm.last_prompt
+    assert "意图分类器" in llm.last_prompt
+
+
+async def test_llm_classifier_returns_invalid_intent_falls_through_to_unknown():
+    """LLM 返回不在标签集内的字符串时，必须降级为 UNKNOWN 不污染路由。"""
+
+    class StubLLM:
+        async def complete_short(self, messages, max_tokens=40, timeout_ms=None):
+            return '{"intent":"NOT_A_REAL_LABEL","confidence":0.99}'
+
+        async def short_reply(self, messages, max_chars=None):
+            return None
+
+    settings = get_settings()
+    cache = KnowledgeCache(); cache.load_from_seed()
+    classifier = IntentClassifier(settings, http=None, llm=StubLLM())
+    orch = DialogOrchestrator(cache, classifier, StubLLM(), ComplianceEngine(), settings)
+    state, _ = await new_call(orch, call_id="C_LLMCLS_BAD")
+    r = await orch.handle_turn(state, "啦啦啦啦")
+    # 标签无效 → 应仍走 fallback，不会把无效 intent 写进结果
+    assert r.action_type == "FALLBACK"
+    assert r.intent in ("UNKNOWN", "AFFIRM", "DENY")
+
+
 async def test_freeform_fallback_with_llm():
     llm = FakeLLM(replies=["这个我帮您记下来了。"])
     orch = make_orchestrator(llm)

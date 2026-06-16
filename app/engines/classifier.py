@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -51,9 +52,11 @@ class ClsResult:
 
 
 class IntentClassifier:
-    def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None) -> None:
+    def __init__(self, settings: Settings, http: httpx.AsyncClient | None = None,
+                 llm=None) -> None:
         self.s = settings
         self.http = http
+        self.llm = llm
 
     async def classify(self, snap, node_id: str, text: str, history: list | None = None) -> ClsResult:
         text = (text or "").strip()
@@ -65,6 +68,12 @@ class IntentClassifier:
             result = await self._via_model(node_id, text, history)
         if result is None:
             result = self._via_keywords(snap, node_id, text)
+        # 关键词命中弱 → 用 LLM 兜底意图分类，避免动辄进入 fallback
+        if (result.intent == "UNKNOWN" and result.confidence < 0.5
+                and self.llm is not None and self.s.llm_classifier_enabled and text):
+            llm_result = await self._via_llm(snap, node_id, text, history)
+            if llm_result is not None and llm_result.intent != "UNKNOWN":
+                result = llm_result
         if negated:
             # 否定语境的金额/时间不是承诺：丢弃方案槽位，弱标签倾向"无力还款"
             for k in ("repayment_amount", "repayment_date",
@@ -103,6 +112,84 @@ class IntentClassifier:
         except Exception:
             logger.debug("classifier service degraded to keywords", exc_info=True)
             return None
+
+    # ---------------- LLM 兜底通道（关键词命中失败时） ----------------
+    async def _via_llm(self, snap, node_id: str, text: str, history) -> ClsResult | None:
+        """让 LLM 在已知标签集合内挑一个意图。仅在关键词分类失败时启用。"""
+        node = snap.nodes.get(node_id) or {}
+        # 仅暴露与当前节点候选路由相关的标签；候选不足时退回全标签
+        candidates = self._candidate_labels(snap, node_id)
+        if len(candidates) < 4:
+            candidates = [lbl for lbl in snap.labels
+                          if lbl["label_id"] not in ("UNKNOWN", "AFFIRM", "DENY")]
+        catalog = "\n".join(f"- {lbl['label_id']}: {lbl.get('label_name') or lbl['label_id']}"
+                            for lbl in candidates)
+        hist_lines = []
+        for role, t in (history or [])[-4:]:
+            hist_lines.append(("用户：" if role == "user" else "调解员：") + str(t))
+        prompt = (
+            "你是民商事电话调解员的意图分类器，只能输出 JSON。\n"
+            f"当前节点：{node.get('node_name') or node_id}。"
+            f"节点目标：{node.get('node_goal') or '推进对话'}。\n"
+            f"最近对话：\n{chr(10).join(hist_lines) or '（首轮）'}\n"
+            f"用户刚才说：{text}\n"
+            "请在下列候选标签中选一个最贴近的：\n"
+            f"{catalog}\n"
+            "只输出一行 JSON，格式：{\"intent\":\"标签ID\",\"confidence\":0~1}"
+        )
+        try:
+            raw = await self.llm.complete_short(
+                [{"role": "user", "content": prompt}], max_tokens=40)
+        except Exception:
+            logger.debug("llm classifier call failed", exc_info=True)
+            return None
+        if not raw:
+            return None
+        parsed = self._parse_intent_json(raw)
+        if not parsed:
+            return None
+        intent_id, conf = parsed
+        # 严格校验：必须是已知标签
+        if not any(lbl["label_id"] == intent_id for lbl in snap.labels):
+            logger.info("llm classifier returned unknown label=%r", intent_id)
+            return None
+        return ClsResult(intent=intent_id, confidence=max(0.0, min(1.0, conf)),
+                         source="llm")
+
+    @staticmethod
+    def _candidate_labels(snap, node_id: str) -> list[dict]:
+        """收集当前节点路由表里出现过的 intent_label，作为候选范围。"""
+        wanted: set[str] = set()
+        for (n, label_id) in snap.routes_index.keys():
+            if n == node_id and label_id:
+                wanted.add(label_id)
+        out = [lbl for lbl in snap.labels if lbl["label_id"] in wanted]
+        existing = {lbl["label_id"] for lbl in out}
+        # 风险类标签全局可触发，始终带上
+        out.extend(lbl for lbl in snap.labels
+                   if lbl.get("global_priority") and lbl["label_id"] not in existing)
+        return out
+
+    @staticmethod
+    def _parse_intent_json(raw: str) -> tuple[str, float] | None:
+        """从 LLM 文本中解析 {intent,confidence}；容忍前后多余字符。"""
+        if not raw:
+            return None
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            data = json.loads(raw[start:end + 1])
+        except Exception:
+            return None
+        intent = data.get("intent")
+        if not isinstance(intent, str):
+            return None
+        try:
+            conf = float(data.get("confidence", 0.7))
+        except (TypeError, ValueError):
+            conf = 0.7
+        return intent, conf
 
     # ---------------- 关键词通道 ----------------
     def _via_keywords(self, snap, node_id: str, text: str) -> ClsResult:

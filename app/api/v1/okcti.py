@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import re
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 END_MARK = "[E-N=D]"
 EVENT_IVR = "ivr"
 EVENT_MSG = "msg"
+LOG_TEXT_LIMIT = 120
 
 
 def _settings(request: Request) -> Settings:
@@ -48,6 +50,52 @@ def _event_bytes(event: str, data: dict, charset: str) -> bytes:
 
 def _len(text: str) -> int:
     return len(text or "")
+
+
+def _preview(text: Any, limit: int = LOG_TEXT_LIMIT) -> str:
+    text = "" if text is None else str(text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _mask_phone(phone: str) -> str:
+    phone = str(phone or "")
+    if len(phone) < 7:
+        return phone
+    return f"{phone[:3]}****{phone[-4:]}"
+
+
+def _state_summary(state) -> dict:
+    if state is None:
+        return {"exists": False}
+    return {
+        "exists": True,
+        "node": state.current_node,
+        "turn": state.turn_index,
+        "ended": state.ended,
+        "transfer": state.transfer_human,
+        "slots": sorted(state.slots.keys()),
+        "retries": dict(state.retries or {}),
+        "history": len(state.history or []),
+        "last_request": (state.okcti_last_request_key or "")[:12],
+    }
+
+
+def _ivr_summary(ivr: dict, msgs: list[dict]) -> dict:
+    cmdcontent = ivr.get("cmdcontent") or ""
+    return {
+        "cmd": ivr.get("cmd"),
+        "think": ivr.get("think"),
+        "lastnode": ivr.get("lastnodeid"),
+        "currentnode": ivr.get("currentnodeid"),
+        "nodelabel": ivr.get("nodelabel"),
+        "content_len": len(str(cmdcontent)),
+        "content": _preview(cmdcontent),
+        "msg_count": len(msgs or []),
+        "msg_lens": [m.get("len") for m in (msgs or [])],
+    }
 
 
 def _voice_interaction(s: Settings) -> dict:
@@ -284,6 +332,10 @@ async def _handle_start(req: OkctiRequest, calls, orchestrator, s: Settings):
     existing = await calls.load(req.callid)
     if existing is not None:
         reply = _last_bot_text(existing)
+        logger.info(
+            "okcti start existing call=%s state=%s last_bot_len=%s last_bot=%r",
+            req.callid, _state_summary(existing), len(reply), _preview(reply),
+        )
         if not reply:
             opening = await orchestrator.opening(existing)
             await calls.save_state(existing)
@@ -294,6 +346,11 @@ async def _handle_start(req: OkctiRequest, calls, orchestrator, s: Settings):
                           node_after=existing.current_node,
                           slots=dict(existing.slots)), existing
     case = await _case_from_request(req, calls)
+    logger.info(
+        "okcti start new call=%s case_id=%s phone=%s force=%s taskid=%s calltaskid=%s logid=%s",
+        req.callid, case.get("case_id"), _mask_phone(case.get("debtor_phone") or ""),
+        s.okcti_force_start, req.taskid or "", req.calltaskid or "", req.logid or "",
+    )
     try:
         state = await calls.start_call(case, call_id=req.callid, force=s.okcti_force_start)
     except CallBlocked as e:
@@ -307,9 +364,19 @@ async def _handle_start(req: OkctiRequest, calls, orchestrator, s: Settings):
 async def _handle_qa(req: OkctiRequest, calls, orchestrator, s: Settings):
     state = await calls.load(req.callid)
     if state is None:
+        logger.warning(
+            "okcti qa state_miss call=%s usertype=%s logid=%s user_len=%s user=%r",
+            req.callid, req.usrtype, req.logid or "", len(_user_text(req)),
+            _preview(_user_text(req)),
+        )
         case = await _case_from_request(req, calls)
         state = await calls.start_call(case, call_id=req.callid, force=s.okcti_force_start)
         await orchestrator.opening(state)
+    logger.info(
+        "okcti qa handle call=%s state=%s usertype=%s user_len=%s user=%r recurl=%s",
+        req.callid, _state_summary(state), req.usrtype, len(_user_text(req)),
+        _preview(_user_text(req)), bool(req.usrrecurl),
+    )
     result = await orchestrator.handle_turn(state, _user_text(req))
     await calls.save_state(state)
     calls.persist_turn(state, result, req.usrcontent)
@@ -317,12 +384,18 @@ async def _handle_qa(req: OkctiRequest, calls, orchestrator, s: Settings):
 
 
 async def _handle_leave(req: OkctiRequest, calls) -> dict:
+    logger.info("okcti leave call=%s talktimelong=%s logid=%s",
+                req.callid, req.talktimelong, req.logid or "")
     await calls.end_call(req.callid, "离开IVR")
     return _minimal_ivr(req, nodelabel="LEAVE", think="LEAVE")
 
 
 async def _handle_end(req: OkctiRequest, calls, qa) -> dict:
     result = "正常结束" if req.callresult in (None, 1) else f"未接通:{req.callresult}"
+    logger.info(
+        "okcti end call=%s callresult=%s mapped_result=%s talktimelong=%s logid=%s",
+        req.callid, req.callresult, result, req.talktimelong, req.logid or "",
+    )
     state = await calls.end_call(req.callid, result)
     report: dict[str, Any] = {}
     if state is not None:
@@ -335,54 +408,82 @@ async def _handle_end(req: OkctiRequest, calls, qa) -> dict:
 
 async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
                         s: Settings) -> AsyncIterator[bytes]:
+    started = time.perf_counter()
     charset = s.okcti_response_charset or "UTF-8"
     typ = req.type.upper()
     request_key = _request_key(req)
     state = await calls.load(req.callid)
-    cached = _cached_response(state, request_key)
-    if cached is not None:
-        logger.info("okcti duplicate request replayed call=%s type=%s logid=%s",
-                    req.callid, typ, req.logid or "")
-        ivr, msgs = cached
+    logger.info(
+        "okcti request start call=%s type=%s usrtype=%s key=%s logid=%s taskid=%s calltaskid=%s "
+        "direct=%s caller=%s callee=%s state=%s user_len=%s user=%r recurl=%s talktimelong=%s",
+        req.callid, typ, req.usrtype, request_key[:12], req.logid or "", req.taskid or "",
+        req.calltaskid or "", req.direct, _mask_phone(req.caller), _mask_phone(req.callee),
+        _state_summary(state), len(_user_text(req)), _preview(_user_text(req)),
+        bool(req.usrrecurl), req.talktimelong,
+    )
+    status = "ok"
+    try:
+        cached = _cached_response(state, request_key)
+        if cached is not None:
+            ivr, msgs = cached
+            logger.info(
+                "okcti duplicate request replayed call=%s type=%s key=%s logid=%s response=%s",
+                req.callid, typ, request_key[:12], req.logid or "", _ivr_summary(ivr, msgs),
+            )
+            yield _event_bytes(EVENT_IVR, ivr, charset)
+            for msg in msgs:
+                yield _event_bytes(EVENT_MSG, msg, charset)
+            return
+
+        state_to_cache = None
+
+        if typ == "START":
+            result, state_to_cache = await _handle_start(req, calls, orchestrator, s)
+            ivr, msgs = _ivr_from_turn(req, result, s)
+        elif typ == "QA":
+            result, state_to_cache = await _handle_qa(req, calls, orchestrator, s)
+            ivr, msgs = _ivr_from_turn(req, result, s)
+        elif typ == "LEAVE":
+            ivr, msgs = await _handle_leave(req, calls), []
+        elif typ == "END":
+            ivr, msgs = await _handle_end(req, calls, qa), []
+        else:
+            status = "unsupported"
+            ivr, msgs = {
+                "callid": req.callid,
+                "cmd": 99,
+                "cmdcontent": f"暂不支持的IVR事件类型：{req.type}",
+                "cmdparams": "",
+                "ttsspkname": s.okcti_tts_spk_name,
+                "nodelabel": "ERROR",
+                "nodescore": 0,
+                "lastnodeid": "",
+                "currentnodeid": "",
+                "think": "unsupported type",
+                "interaction": {},
+            }, []
+
+        if state_to_cache is not None:
+            _remember_response(state_to_cache, request_key, ivr, msgs)
+            await calls.save_state(state_to_cache)
+
+        logger.info(
+            "okcti response ready call=%s type=%s key=%s state_after=%s response=%s",
+            req.callid, typ, request_key[:12], _state_summary(state_to_cache or state),
+            _ivr_summary(ivr, msgs),
+        )
         yield _event_bytes(EVENT_IVR, ivr, charset)
         for msg in msgs:
             yield _event_bytes(EVENT_MSG, msg, charset)
-        return
-
-    state_to_cache = None
-
-    if typ == "START":
-        result, state_to_cache = await _handle_start(req, calls, orchestrator, s)
-        ivr, msgs = _ivr_from_turn(req, result, s)
-    elif typ == "QA":
-        result, state_to_cache = await _handle_qa(req, calls, orchestrator, s)
-        ivr, msgs = _ivr_from_turn(req, result, s)
-    elif typ == "LEAVE":
-        ivr, msgs = await _handle_leave(req, calls), []
-    elif typ == "END":
-        ivr, msgs = await _handle_end(req, calls, qa), []
-    else:
-        ivr, msgs = {
-            "callid": req.callid,
-            "cmd": 99,
-            "cmdcontent": f"暂不支持的IVR事件类型：{req.type}",
-            "cmdparams": "",
-            "ttsspkname": s.okcti_tts_spk_name,
-            "nodelabel": "ERROR",
-            "nodescore": 0,
-            "lastnodeid": "",
-            "currentnodeid": "",
-            "think": "unsupported type",
-            "interaction": {},
-        }, []
-
-    if state_to_cache is not None:
-        _remember_response(state_to_cache, request_key, ivr, msgs)
-        await calls.save_state(state_to_cache)
-
-    yield _event_bytes(EVENT_IVR, ivr, charset)
-    for msg in msgs:
-        yield _event_bytes(EVENT_MSG, msg, charset)
+    except Exception:
+        status = "error"
+        logger.exception("okcti request failed call=%s type=%s key=%s logid=%s",
+                         req.callid, typ, request_key[:12], req.logid or "")
+        raise
+    finally:
+        elapsed = int((time.perf_counter() - started) * 1000)
+        logger.info("okcti request end call=%s type=%s key=%s status=%s elapsed_ms=%s",
+                    req.callid, typ, request_key[:12], status, elapsed)
 
 
 @router.post("/welcome")

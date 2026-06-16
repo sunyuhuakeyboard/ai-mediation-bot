@@ -37,11 +37,44 @@ logger = logging.getLogger(__name__)
 _PLAN_SLOTS_ONCE = ("repayment_amount", "repayment_date")
 _QUESTION_ENDINGS = ("？", "?")
 _NORM_RE = re.compile(r"[\s，,。.！!？?；;：:、~\-—_]+")
+_LOG_TEXT_LIMIT = 120
 
 
 def _norm(text: str) -> str:
     """归一化用于复读比对：去标点/空白，保留语义字符。"""
     return _NORM_RE.sub("", str(text or ""))
+
+
+def _preview(text, limit: int = _LOG_TEXT_LIMIT) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}..."
+
+
+def _segments_preview(segments: list[str]) -> list[dict]:
+    return [{"len": len(s or ""), "text": _preview(s)} for s in (segments or [])]
+
+
+def _slot_changes(before: dict, after: dict) -> dict:
+    keys = sorted(set(before) | set(after))
+    changes = {}
+    for key in keys:
+        if before.get(key) != after.get(key):
+            changes[key] = {"before": before.get(key), "after": after.get(key)}
+    return changes
+
+
+def _message_overview(messages: list[dict]) -> list[dict]:
+    overview = []
+    for msg in messages or []:
+        content = msg.get("content") or ""
+        overview.append({
+            "role": msg.get("role"),
+            "chars": len(str(content)),
+            "preview": _preview(content, 180),
+        })
+    return overview
 
 
 def _is_dup(candidate: str, refs) -> bool:
@@ -103,6 +136,11 @@ class DialogOrchestrator:
         t0 = _now_ms()
         snap = self.cache.snap()
         ctx = self._ctx(state)
+        logger.info(
+            "dialog opening start call=%s node=%s case_id=%s ctx_keys=%s",
+            state.call_id, state.current_node, (state.case or {}).get("case_id"),
+            sorted(ctx.keys()),
+        )
         n001 = snap.nodes["N001"]
         segments = [self._entry(snap, n001, ctx, state)]
         if self.s.opening_disclosure and self.s.opening_disclosure_text:
@@ -114,6 +152,11 @@ class DialogOrchestrator:
         state.current_node = listen["node_id"]
         reply = sanitize_tts("".join(s for s in segments if s))
         state.remember("bot", reply)
+        logger.info(
+            "dialog opening done call=%s node_after=%s reply_len=%s reply=%r segments=%s elapsed_ms=%s",
+            state.call_id, state.current_node, len(reply), _preview(reply),
+            _segments_preview(segments), int(_now_ms() - t0),
+        )
         return TurnResult(call_id=state.call_id, reply=reply, segments=segments,
                           action_type="OPENING", node_before="N001",
                           node_after=state.current_node, slots=dict(state.slots),
@@ -125,12 +168,23 @@ class DialogOrchestrator:
         snap = self.cache.snap()
 
         if state.ended:
+            logger.info("dialog turn ignored ended call=%s node=%s user=%r",
+                        state.call_id, state.current_node, _preview(user_text))
             return TurnResult(call_id=state.call_id, reply="本次通话已结束，感谢您的配合。",
                               segments=["本次通话已结束，感谢您的配合。"], action_type="ENDED",
                               node_before=state.current_node, node_after=state.current_node,
                               end_call=True, latency_ms={"total": 0})
 
         node_before = state.current_node
+        slots_before = dict(state.slots)
+        last_bot_before = self._last_bot(state)
+        logger.info(
+            "dialog turn start call=%s turn=%s node=%s user_len=%s user=%r last_bot_len=%s "
+            "last_bot=%r slots=%s retries=%s history=%s",
+            state.call_id, state.turn_index + 1, node_before, len(user_text or ""),
+            _preview(user_text), len(last_bot_before), _preview(last_bot_before),
+            dict(state.slots), dict(state.retries or {}), len(state.history or []),
+        )
         state.remember("user", user_text)
 
         # 用户明确要求停止联系 → 结束时进谢绝名单（外呼策略层强制生效）
@@ -160,7 +214,13 @@ class DialogOrchestrator:
                     tmp[k] = v
             route_m = match_route(snap, node_before, cls_m, tmp)
             if route_m is not None:
-                logger.info("asr fragments merged: %r + %r", state.last_fragment, user_text)
+                logger.info(
+                    "asr fragments merged call=%s node=%s previous=%r current=%r merged=%r "
+                    "intent=%s route=%s",
+                    state.call_id, node_before, _preview(state.last_fragment),
+                    _preview(user_text), _preview(merged_text), cls_m.intent,
+                    route_m.get("route_id"),
+                )
                 cls, route, user_text = cls_m, route_m, merged_text
                 state.slots = tmp
         state.last_fragment = user_text if route is None else None
@@ -168,6 +228,29 @@ class DialogOrchestrator:
         for k, v in (snap.label_effects.get(cls.intent) or {}).items():
             state.slots[k] = v
         t2 = _now_ms()
+
+        logger.info(
+            "dialog classified call=%s node=%s intent=%s objection=%s source=%s conf=%.3f "
+            "emotion=%s risk=%s extracted_slots=%s slot_changes=%s last_fragment=%r",
+            state.call_id, node_before, cls.intent, cls.objection, cls.source,
+            cls.confidence, cls.emotion, cls.risk, dict(cls.slots),
+            _slot_changes(slots_before, state.slots), _preview(state.last_fragment),
+        )
+        if route is None:
+            logger.info(
+                "dialog route miss call=%s node=%s intent=%s objection=%s slots=%s",
+                state.call_id, node_before, cls.intent, cls.objection, dict(state.slots),
+            )
+        else:
+            logger.info(
+                "dialog route hit call=%s node=%s route=%s action=%s next=%s template=%s "
+                "strategy=%s priority=%s condition=%s set_slots=%s",
+                state.call_id, node_before, route.get("route_id"),
+                route.get("action_type"), route.get("next_node"),
+                route.get("template_id"), route.get("strategy_id"),
+                route.get("priority"), route.get("slot_condition"),
+                route.get("set_slots"),
+            )
 
         segments: list[str] = []
         end_call = transfer = False
@@ -238,6 +321,19 @@ class DialogOrchestrator:
         total = int(_now_ms() - t0)
         metrics.TURNS_TOTAL.labels(action=action).inc()
         metrics.TURN_LATENCY_MS.observe(total)
+        latency = {"classify": int(t1 - t0), "route": int(t2 - t1),
+                   "reply": int(t3 - t2), "compliance": int(t4 - t3),
+                   "total": total}
+        logger.info(
+            "dialog turn done call=%s turn=%s action=%s route=%s node=%s->%s intent=%s "
+            "llm_used=%s end=%s transfer=%s reply_len=%s reply=%r segments=%s compliance=%s "
+            "latency_ms=%s slots=%s retries=%s",
+            state.call_id, state.turn_index, action, route_id, node_before,
+            state.current_node, cls.intent, llm_used, end_call, transfer, len(reply),
+            _preview(reply), _segments_preview(segments),
+            {"passed": comp.passed, "violations": comp.violations}, latency,
+            dict(state.slots), dict(state.retries or {}),
+        )
 
         return TurnResult(
             call_id=state.call_id, reply=reply, segments=segments,
@@ -248,9 +344,7 @@ class DialogOrchestrator:
             slots=dict(state.slots), end_call=end_call, transfer_human=transfer,
             llm_used=llm_used, call_result=state.call_result,
             compliance={"passed": comp.passed, "violations": comp.violations},
-            latency_ms={"classify": int(t1 - t0), "route": int(t2 - t1),
-                        "reply": int(t3 - t2), "compliance": int(t4 - t3),
-                        "total": total},
+            latency_ms=latency,
         )
 
     # ================= 内部 =================
@@ -280,10 +374,17 @@ class DialogOrchestrator:
         """渲染模板。多变体场景下，优先返回与 avoid_refs 都不复读的候选。"""
         t = snap.templates.get(template_id or "")
         if not t:
+            if state is not None:
+                logger.warning("template missing call=%s template=%s", state.call_id, template_id)
             return ""
         texts = [t["template_text"], *(t.get("variants") or [])]
         if not texts:
+            if state is not None:
+                logger.warning("template empty call=%s template=%s", state.call_id, template_id)
             return ""
+        selected_index = 0
+        rotated = False
+        avoided_duplicate = False
         if state is not None and self.s.variant_rotation and len(texts) > 1:
             n = len(texts)
             cur = state.variant_cursor.get(t["template_id"], 0)
@@ -294,12 +395,24 @@ class DialogOrchestrator:
                     cand = texts[(cur + offset) % n]
                     if not _is_dup(cand, refs):
                         chosen, idx = cand, cur + offset
+                        avoided_duplicate = offset > 0
                         break
             state.variant_cursor[t["template_id"]] = idx + 1
+            selected_index = idx % n
+            rotated = True
             text = chosen
         else:
             text = texts[0]
-        return strip_unfilled(render(text, ctx))
+        rendered = strip_unfilled(render(text, ctx))
+        if state is not None:
+            logger.info(
+                "template rendered call=%s template=%s variant=%s/%s rotated=%s "
+                "avoid_refs=%s avoided_duplicate=%s ctx_keys=%s text_len=%s text=%r",
+                state.call_id, t.get("template_id"), selected_index + 1, len(texts),
+                rotated, bool(avoid_refs), avoided_duplicate, sorted(ctx.keys()),
+                len(rendered), _preview(rendered),
+            )
+        return rendered
 
     def _entry(self, snap, node: dict, ctx: dict, state: CallState | None = None) -> str:
         return self._tpl(snap, node.get("entry_template_id"), ctx, state)
@@ -310,6 +423,17 @@ class DialogOrchestrator:
             if role == "bot" and text:
                 return str(text)
         return ""
+
+    @staticmethod
+    def _recent_bots(state: CallState, n: int = 3) -> list[str]:
+        """返回最近 n 条 bot 回复（按时间倒序），用于跨多轮复读判定。"""
+        out: list[str] = []
+        for role, text in reversed(state.history or []):
+            if role == "bot" and text:
+                out.append(str(text))
+                if len(out) >= n:
+                    break
+        return out
 
     @staticmethod
     def _collapse_self_repeat(text: str) -> str:
@@ -354,8 +478,17 @@ class DialogOrchestrator:
         tail = self._strip_overlap_prefix(reply, last)
         if tail and _norm(tail) != _norm(reply):
             text = sanitize_tts(tail)
+            logger.info(
+                "avoid_repeat stripped_overlap call=%s last_len=%s reply_len=%s tail_len=%s "
+                "last=%r reply=%r tail=%r",
+                state.call_id, len(last), len(reply), len(text), _preview(last),
+                _preview(reply), _preview(text),
+            )
             return text, [text]
-        logger.info("avoid_repeat compressed call=%s", state.call_id)
+        logger.info(
+            "avoid_repeat compressed call=%s last_len=%s reply_len=%s last=%r reply=%r",
+            state.call_id, len(last), len(reply), _preview(last), _preview(reply),
+        )
         text = sanitize_tts("我这边再补充一句，请您看是否方便回应一下。")
         return text, [text]
 
@@ -396,6 +529,13 @@ class DialogOrchestrator:
                              cls: ClsResult, user_text: str, ctx: dict):
         """执行路由动作，返回 (主话术, 监听节点, 是否用LLM)。"""
         action = route["action_type"]
+        logger.info(
+            "dialog primary start call=%s route=%s action=%s target=%s template=%s "
+            "strategy=%s allow_llm=%s user=%r ctx_keys=%s",
+            state.call_id, route.get("route_id"), action, target.get("node_id"),
+            route.get("template_id"), route.get("strategy_id"),
+            target.get("allow_llm", True), _preview(user_text), sorted(ctx.keys()),
+        )
 
         # ---- 方案确认门控（N021）----
         if target["node_id"] == "N021":
@@ -415,41 +555,94 @@ class DialogOrchestrator:
             if missing:
                 ask = self._tpl(snap, snap.slot_questions.get(missing, ""), ctx, state)
                 stay = "N019" if missing.startswith("installment") else "N017"
+                logger.info(
+                    "dialog primary ask_missing_slot call=%s route=%s missing=%s stay=%s ask=%r",
+                    state.call_id, route.get("route_id"), missing, stay,
+                    _preview(ask),
+                )
                 return (ask or self._entry(snap, snap.nodes[stay], ctx, state),
                         snap.nodes[stay], False)
+            logger.info(
+                "dialog primary plan_confirm call=%s route=%s reply=%r",
+                state.call_id, route.get("route_id"), _preview(text),
+            )
             return text, target, False
 
         if action in ("DIRECT_TEMPLATE", "RECORD_ONLY"):
             txt = self._tpl(snap, route.get("template_id"), ctx, state) \
                 or self._entry(snap, target, ctx, state)
+            logger.info(
+                "dialog primary template call=%s route=%s action=%s reply=%r",
+                state.call_id, route.get("route_id"), action, _preview(txt),
+            )
             return txt, target, False
 
         if action == "ASK_SLOT":
             for s in target.get("required_slots") or []:
                 if not state.slots.get(s) and s in snap.slot_questions:
-                    return self._tpl(snap, snap.slot_questions[s], ctx, state), target, False
-            return self._entry(snap, target, ctx, state), target, False
+                    txt = self._tpl(snap, snap.slot_questions[s], ctx, state)
+                    logger.info(
+                        "dialog primary ask_slot call=%s route=%s slot=%s reply=%r",
+                        state.call_id, route.get("route_id"), s, _preview(txt),
+                    )
+                    return txt, target, False
+            txt = self._entry(snap, target, ctx, state)
+            logger.info(
+                "dialog primary ask_slot_entry call=%s route=%s reply=%r",
+                state.call_id, route.get("route_id"), _preview(txt),
+            )
+            return txt, target, False
 
         if action in ("LLM_SHORT_REPLY", "TEMPLATE_REWRITE"):
+            if self.llm is None:
+                logger.info("dialog llm skipped call=%s route=%s reason=no_client",
+                            state.call_id, route.get("route_id"))
+            elif not target.get("allow_llm", True):
+                logger.info("dialog llm skipped call=%s route=%s reason=target_disallow target=%s",
+                            state.call_id, route.get("route_id"), target.get("node_id"))
             if self.llm is not None and target.get("allow_llm", True):
                 try:
                     msgs = build_messages(snap, route, target, strategy, template,
                                           cls, user_text, ctx, state.slots,
                                           history=state.history)
+                    logger.info(
+                        "dialog llm request call=%s route=%s model=%s messages=%s",
+                        state.call_id, route.get("route_id"), self.s.llm_model,
+                        _message_overview(msgs),
+                    )
                     out = await self.llm.short_reply(msgs)
                     if out and len(out) >= 4:
                         metrics.LLM_CALLS.labels(outcome="ok").inc()
+                        logger.info(
+                            "dialog llm ok call=%s route=%s out_len=%s out=%r",
+                            state.call_id, route.get("route_id"), len(out), _preview(out),
+                        )
                         return out, target, True
                     metrics.LLM_CALLS.labels(outcome="fallback").inc()
+                    logger.warning(
+                        "dialog llm fallback call=%s route=%s reason=empty_or_short out_len=%s out=%r",
+                        state.call_id, route.get("route_id"), len(out or ""), _preview(out),
+                    )
                 except Exception:
                     metrics.LLM_CALLS.labels(outcome="fallback").inc()
-                    logger.exception("llm path failed, fallback to template")
+                    logger.exception("llm path failed, fallback to template call=%s route=%s",
+                                     state.call_id, route.get("route_id"))
             # 超时/失败 → 参考话术模板（含变体轮换）兜底
             txt = self._tpl(snap, route.get("template_id"), ctx, state) \
                 or self._entry(snap, target, ctx, state)
+            logger.info(
+                "dialog llm fallback_template call=%s route=%s template=%s reply=%r",
+                state.call_id, route.get("route_id"), route.get("template_id"),
+                _preview(txt),
+            )
             return txt, target, False
 
-        return self._entry(snap, target, ctx, state), target, False
+        txt = self._entry(snap, target, ctx, state)
+        logger.info(
+            "dialog primary default_entry call=%s route=%s action=%s reply=%r",
+            state.call_id, route.get("route_id"), action, _preview(txt),
+        )
+        return txt, target, False
 
     def _advance(self, snap, segments: list[str], node: dict,
                  primary_tpl_id: str | None, ctx: dict, state: CallState | None = None):
@@ -464,11 +657,27 @@ class DialogOrchestrator:
                     end_txt = self._tpl(snap, "TPL_END_001", ctx, state)
                     if end_txt and not _is_dup(end_txt, segments):
                         segments.append(end_txt)
+                        if state is not None:
+                            logger.info(
+                                "dialog advance append_end call=%s node=%s template=TPL_END_001 text=%r",
+                                state.call_id, nid, _preview(end_txt),
+                            )
+                    elif state is not None and end_txt:
+                        logger.info(
+                            "dialog advance skip_dup_end call=%s node=%s template=TPL_END_001 text=%r",
+                            state.call_id, nid, _preview(end_txt),
+                        )
                 end = True
                 break
             if nid == TERMINAL_TRANSFER:
                 if not segments or not segments[-1]:
-                    segments.append(self._entry(snap, node, ctx, state))
+                    entry = self._entry(snap, node, ctx, state)
+                    segments.append(entry)
+                    if state is not None:
+                        logger.info(
+                            "dialog advance append_transfer call=%s node=%s text=%r",
+                            state.call_id, nid, _preview(entry),
+                        )
                 transfer = True
                 break
             if not node.get("auto_chain"):
@@ -482,6 +691,20 @@ class DialogOrchestrator:
             entry = self._entry(snap, nxt, ctx, state)
             if entry and not _is_dup(entry, segments):
                 segments.append(entry)
+                if state is not None:
+                    logger.info(
+                        "dialog advance append_chain call=%s from_node=%s next_node=%s "
+                        "template=%s text=%r",
+                        state.call_id, nid, nxt.get("node_id"),
+                        nxt.get("entry_template_id"), _preview(entry),
+                    )
+            elif state is not None and entry:
+                logger.info(
+                    "dialog advance skip_dup_chain call=%s from_node=%s next_node=%s "
+                    "template=%s text=%r",
+                    state.call_id, nid, nxt.get("node_id"),
+                    nxt.get("entry_template_id"), _preview(entry),
+                )
             node = nxt
         return node, end, transfer
 
@@ -490,6 +713,11 @@ class DialogOrchestrator:
                         user_text: str, ctx: dict, cls: ClsResult) -> str | None:
         """UNKNOWN长尾：受限LLM简短回应并拉回当前节点问题（仍过合规引擎）。"""
         if self.llm is None or not self.s.freeform_fallback_llm:
+            logger.info(
+                "dialog freeform skipped call=%s node=%s reason=%s",
+                state.call_id, node.get("node_id"),
+                "no_client" if self.llm is None else "disabled",
+            )
             return None
         try:
             pseudo_route = {"prompt_component_ids": FREEFORM_COMPONENTS,
@@ -501,18 +729,38 @@ class DialogOrchestrator:
             msgs = build_messages(snap, pseudo_route, node, FREEFORM_STRATEGY,
                                   pseudo_template, cls, user_text, ctx, state.slots,
                                   history=state.history)
+            logger.info(
+                "dialog freeform request call=%s node=%s user=%r entry=%r messages=%s",
+                state.call_id, node.get("node_id"), _preview(user_text),
+                _preview(entry_text), _message_overview(msgs),
+            )
             out = await self.llm.short_reply(msgs)
             if out and len(out) >= 4:
                 metrics.LLM_CALLS.labels(outcome="ok").inc()
-                last_bot = self._last_bot(state)
+                # 跨最近3轮 bot 比对：避免几轮前刚问过的节点主问句再被追加
+                recent_bots = self._recent_bots(state, n=3)
                 if (entry_text and not out.rstrip().endswith(_QUESTION_ENDINGS)
-                        and not _is_dup(entry_text, [out, last_bot])):
+                        and not _is_dup(entry_text, [out, *recent_bots])):
                     out = out + entry_text   # 拉回节点主问句
+                    logger.info(
+                        "dialog freeform appended_entry call=%s node=%s out=%r entry=%r",
+                        state.call_id, node.get("node_id"), _preview(out),
+                        _preview(entry_text),
+                    )
+                logger.info(
+                    "dialog freeform ok call=%s node=%s out_len=%s out=%r",
+                    state.call_id, node.get("node_id"), len(out), _preview(out),
+                )
                 return out
             metrics.LLM_CALLS.labels(outcome="fallback").inc()
+            logger.warning(
+                "dialog freeform fallback call=%s node=%s reason=empty_or_short out_len=%s out=%r",
+                state.call_id, node.get("node_id"), len(out or ""), _preview(out),
+            )
         except Exception:
             metrics.LLM_CALLS.labels(outcome="fallback").inc()
-            logger.exception("freeform fallback failed")
+            logger.exception("freeform fallback failed call=%s node=%s",
+                             state.call_id, node.get("node_id"))
         return None
 
     async def _fallback(self, snap, state: CallState, ctx: dict,
@@ -523,30 +771,56 @@ class DialogOrchestrator:
         nid = node["node_id"]
         n = state.retries.get(nid, 0) + 1
         state.retries[nid] = n
+        logger.info(
+            "dialog fallback start call=%s node=%s retry=%s max_retry=%s intent=%s user=%r",
+            state.call_id, nid, n, node.get("max_retry") or 1, cls.intent,
+            _preview(user_text),
+        )
         if n > (node.get("max_retry") or 1):
             fb = snap.nodes.get(node.get("fallback_node") or "") or snap.nodes[TERMINAL_END]
             if fb["node_id"] == TERMINAL_TRANSFER:
+                logger.info("dialog fallback jump call=%s from_node=%s to_node=%s transfer=true",
+                            state.call_id, nid, fb.get("node_id"))
                 return [self._entry(snap, fb, ctx, state)], fb, False, True, False
             if fb["node_id"] == TERMINAL_END:
                 segs = [self._tpl(snap, "TPL_FALLBACK_001", ctx, state),
                         self._tpl(snap, "TPL_END_001", ctx, state)]
+                logger.info("dialog fallback jump call=%s from_node=%s to_node=%s end=true segments=%s",
+                            state.call_id, nid, fb.get("node_id"), _segments_preview(segs))
                 return segs, fb, True, False, False
             segs = [self._entry(snap, fb, ctx, state)]
             listen, end, tr = self._advance(snap, segs, fb,
                                             fb.get("entry_template_id"), ctx, state)
+            logger.info(
+                "dialog fallback jump call=%s from_node=%s to_node=%s listen=%s end=%s transfer=%s segments=%s",
+                state.call_id, nid, fb.get("node_id"), listen.get("node_id"),
+                end, tr, _segments_preview(segs),
+            )
             return segs, listen, end, tr, False
 
         # 先尝试受限LLM长尾应答（解决"只会说没听清"的死板问题）
         free = await self._freeform(snap, state, node, user_text, ctx, cls)
         if free:
+            logger.info("dialog fallback freeform_used call=%s node=%s reply=%r",
+                        state.call_id, nid, _preview(free))
             return [free], node, False, False, True
 
-        last_bot = self._last_bot(state)
+        recent_bots = self._recent_bots(state, n=3)
+        last_bot = recent_bots[0] if recent_bots else ""
         retry = self._tpl(snap, "TPL_RETRY_001", ctx, state,
-                          avoid_refs=[last_bot])
+                          avoid_refs=recent_bots)
         entry = self._entry(snap, node, ctx, state)
-        # 用户刚听过节点主问句：仅给出转折提示，避免连续两轮原样复读
-        if entry and last_bot and _is_dup(entry, [last_bot]):
+        # 用户最近 N 轮已听过节点主问句：仅给出转折提示，避免再次原样复读
+        if entry and recent_bots and _is_dup(entry, recent_bots):
+            logger.info(
+                "dialog fallback skip_entry_dup call=%s node=%s retry=%r entry=%r last_bot=%r",
+                state.call_id, nid, _preview(retry), _preview(entry), _preview(last_bot),
+            )
             return [retry], node, False, False, False
         merged = (retry + entry) if entry else retry
-        return [self._collapse_self_repeat(merged)], node, False, False, False
+        collapsed = self._collapse_self_repeat(merged)
+        logger.info(
+            "dialog fallback retry_template call=%s node=%s retry=%r entry=%r collapsed=%r",
+            state.call_id, nid, _preview(retry), _preview(entry), _preview(collapsed),
+        )
+        return [collapsed], node, False, False, False
