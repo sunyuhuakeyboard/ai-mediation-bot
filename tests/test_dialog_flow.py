@@ -79,6 +79,38 @@ async def test_full_flow_reach_agreement():
     assert state.ended
 
 
+async def test_mediation_method_question_uses_explanation_strategy():
+    orch = make_orchestrator(FakeLLM(["对不起我们暂时无法提供该服务了"]))
+    state, _ = await new_call(orch)
+    await orch.handle_turn(state, "我是")
+    await orch.handle_turn(state, "收到了")
+
+    r = await orch.handle_turn(state, "怎么调解")
+
+    assert r.intent == "HESITATE"
+    assert r.route_id == "R130"
+    assert r.action_type == "DIRECT_TEMPLATE"
+    assert r.llm_used is False
+    assert "无法提供" not in r.reply
+    assert "听取" in r.reply and "反馈" in r.reply and "自愿" in r.reply
+    assert state.current_node == "N009"
+
+
+async def test_freeform_refuses_service_falls_back_to_template():
+    orch = make_orchestrator(FakeLLM(["对不起我们暂时无法提供该服务了"]))
+    state = CallState(call_id="T_REFUSAL", case=dict(DEMO_CASE))
+    state.current_node = "N017"
+    state.slots.update(identity_confirmed=True, willingness=True, mediation_willingness="愿意")
+
+    r = await orch.handle_turn(state, "这个事情我有点复杂")
+
+    assert r.intent == "UNKNOWN"
+    assert r.action_type == "FALLBACK"
+    assert r.llm_used is False
+    assert "无法提供" not in r.reply
+    assert "怎么处理" in r.reply or "时间或金额" in r.reply
+
+
 # ---------------- 分期槽位收集闭环 ----------------
 async def test_installment_slot_loop():
     orch = make_orchestrator(FakeLLM())

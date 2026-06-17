@@ -39,6 +39,11 @@ _EXCLUDE_KW_SCAN = {"AFFIRM", "DENY", "UNKNOWN", "PROVIDE_PLAN"}
 
 _EMOTION_HOT = ("烦", "气死", "凭什么", "有病", "滚", "妈的", "神经", "吵", "闹")
 _EMOTION_LOW = ("唉", "难受", "压力", "愁", "没办法", "实在")
+_MEDIATION_EXPLAIN_NODES = {"N009", "N012"}
+_MEDIATION_EXPLAIN_HINTS = (
+    "怎么调解", "如何调解", "咋调解", "怎么个调解", "调解怎么弄",
+    "调解流程", "调解方式", "怎么协商", "如何协商", "怎么沟通",
+)
 
 
 @dataclass
@@ -209,6 +214,9 @@ class IntentClassifier:
 
     # ---------------- 关键词通道 ----------------
     def _via_keywords(self, snap, node_id: str, text: str) -> ClsResult:
+        if node_id in _MEDIATION_EXPLAIN_NODES and any(h in text for h in _MEDIATION_EXPLAIN_HINTS):
+            return ClsResult(intent="HESITATE", confidence=0.82, source="keyword")
+
         # 1) 业务标签最长命中（全局优先标签加权，保证风险类优先）
         matched: dict[str, tuple[dict, int]] = {}
         for label in snap.labels:

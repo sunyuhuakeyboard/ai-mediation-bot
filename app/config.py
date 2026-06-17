@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     app_name: str = "ai-mediation-bot"
     debug: bool = False
+    conversation_scene: str = "electronic_delivery"  # electronic_delivery / mediation
 
     # 离线演示模式：不依赖 PG/Redis，知识库走内置种子，状态存内存（用于本地试跑/单测）
     offline_mode: bool = False
@@ -79,6 +80,14 @@ class Settings(BaseSettings):
     okcti_default_debtor_name: str = "张小贤"
     okcti_default_platform_name: str = "AI调解中心"
     okcti_default_creditor_name: str = "橘子分期"
+    # 电子送达场景兜底值
+    edelivery_default_court_name: str = "某某区人民法院"
+    edelivery_default_respondent_name: str = "刘某华"
+    edelivery_default_plaintiff_name: str = "贵阳天某有限公司"
+    edelivery_default_lawsuit_type: str = "买卖合同纠纷"
+    edelivery_default_claim_amount: str = "12,500元"
+    edelivery_default_respondent_dir: str = "贵阳市观山湖区林城东路205号405室"
+    edelivery_default_court_contact: str = "0851-376428"
     # IVR 语音交互参数（毫秒）：全部为 0 时各厂商默认值不一致，最常见就是 IVR 自播 cmdcontent
     # 一次形成"每句话说两遍"的听感。显式给出后由我方驱动节奏。
     okcti_voice_allow_stop: int = 1     # 允许用户语音打断

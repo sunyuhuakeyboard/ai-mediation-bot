@@ -16,17 +16,20 @@ const state = {
 const demoImport = {
   rows: [
     {
-      case_id: "CASE_TEST_001",
-      debtor_name: "李四",
-      debtor_gender: "男",
+      case_id: "CASE_ED_001",
+      respondent_name: "刘某华",
+      debtor_name: "刘某华",
       debtor_phone: "13900000001",
-      platform_name: "橘子分期",
-      creditor_name: "辽宁友信资产管理",
-      mediation_org: "XX民商事调解中心",
-      total_amount: 9800,
-      overdue_days: 42,
-      official_verify_channel: "官方客服热线",
-      notice_status: "已发送",
+      respondent_dir: "贵阳市观山湖区林城东路205号405室",
+      plaintiff_name: "贵阳天某有限公司",
+      creditor_name: "贵阳天某有限公司",
+      court_name: "某某区人民法院",
+      court_contact: "0851-376428",
+      lawsuit_type: "买卖合同纠纷",
+      claim_amount: "12500元",
+      court_liantime: "2026年5月13日",
+      court_CBBM: "民一庭",
+      court_CBFG: "张某勤",
     },
   ],
 };
@@ -46,9 +49,16 @@ function okctiSample(type) {
     ch: 1,
     sysid: 1,
     taskid: "TASK_DEMO",
-    calltaskid: "CASE20260610001",
+    calltaskid: "CASE_ED_001",
     oricaller: "",
     video: false,
+    respondent_name: "刘某华",
+    respondent_dir: "贵阳市观山湖区林城东路205号405室",
+    plaintiff_name: "贵阳天某有限公司",
+    court_name: "某某区人民法院",
+    court_contact: "0851-376428",
+    lawsuit_type: "买卖合同纠纷",
+    claim_amount: "12500元",
   };
   if (type === "END") {
     base.talktimelong = 60;
@@ -191,7 +201,8 @@ async function refreshOverview() {
   try {
     const health = await api("/healthz");
     setText("#healthStatus", health.status || "ok");
-    setText("#runtimeMode", health.offline_mode ? "offline" : "database");
+    const scene = health.conversation_scene === "electronic_delivery" ? "电子送达" : "调解";
+    setText("#runtimeMode", `${health.offline_mode ? "offline" : "database"} · ${scene}`);
     setText("#runtimeLine", `运行中 · ${state.apiBase}`);
     if (health.knowledge_version) setText("#knowledgeVersion", health.knowledge_version);
   } catch (err) {
@@ -783,6 +794,8 @@ function init() {
   $("#queryCallId").value = state.callId;
   $("#policyKind").value = state.policy.kind;
   setText("#activeCall", state.callId || "-");
+  $("#caseId").value = "";
+  $("#inlineCase").value = pretty(demoImport.rows[0]);
   $("#caseImportJson").value = pretty(demoImport);
   $("#okctiJson").value = pretty(okctiSample("START"));
 
@@ -806,8 +819,8 @@ function init() {
   });
 
   $("#useDemoCase").addEventListener("click", () => {
-    $("#caseId").value = "CASE20260610001";
-    $("#inlineCase").value = "";
+    $("#caseId").value = "";
+    $("#inlineCase").value = pretty(demoImport.rows[0]);
     $("#forceStart").checked = true;
   });
   $("#clearTimeline").addEventListener("click", () => {

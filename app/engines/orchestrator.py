@@ -38,6 +38,10 @@ _PLAN_SLOTS_ONCE = ("repayment_amount", "repayment_date")
 _QUESTION_ENDINGS = ("？", "?")
 _NORM_RE = re.compile(r"[\s，,。.！!？?；;：:、~\-—_]+")
 _LOG_TEXT_LIMIT = 120
+_SERVICE_REFUSAL_HINTS = (
+    "无法提供该服务", "暂时无法提供", "不能提供该服务", "无法提供服务",
+    "无法处理该请求", "不能处理该请求", "无法协助", "不能协助",
+)
 
 
 def _norm(text: str) -> str:
@@ -87,6 +91,10 @@ def _is_dup(candidate: str, refs) -> bool:
         if nr and (nc == nr or nc in nr or nr in nc):
             return True
     return False
+
+
+def _looks_like_service_refusal(text: str) -> bool:
+    return any(h in str(text or "") for h in _SERVICE_REFUSAL_HINTS)
 
 
 @dataclass
@@ -682,12 +690,18 @@ class DialogOrchestrator:
                     )
                     out = await self.llm.short_reply(msgs)
                     if out and len(out) >= 4:
-                        metrics.LLM_CALLS.labels(outcome="ok").inc()
-                        logger.info(
-                            "dialog llm ok call=%s route=%s out_len=%s out=%r",
-                            state.call_id, route.get("route_id"), len(out), _preview(out),
-                        )
-                        return out, target, True
+                        if _looks_like_service_refusal(out):
+                            logger.warning(
+                                "dialog llm fallback call=%s route=%s reason=service_refusal out=%r",
+                                state.call_id, route.get("route_id"), _preview(out),
+                            )
+                        else:
+                            metrics.LLM_CALLS.labels(outcome="ok").inc()
+                            logger.info(
+                                "dialog llm ok call=%s route=%s out_len=%s out=%r",
+                                state.call_id, route.get("route_id"), len(out), _preview(out),
+                            )
+                            return out, target, True
                     metrics.LLM_CALLS.labels(outcome="fallback").inc()
                     logger.warning(
                         "dialog llm fallback call=%s route=%s reason=empty_or_short out_len=%s out=%r",
@@ -806,6 +820,13 @@ class DialogOrchestrator:
             )
             out = await self.llm.short_reply(msgs)
             if out and len(out) >= 4:
+                if _looks_like_service_refusal(out):
+                    metrics.LLM_CALLS.labels(outcome="fallback").inc()
+                    logger.warning(
+                        "dialog freeform fallback call=%s node=%s reason=service_refusal out=%r",
+                        state.call_id, node.get("node_id"), _preview(out),
+                    )
+                    return None
                 metrics.LLM_CALLS.labels(outcome="ok").inc()
                 # 跨最近3轮 bot 比对：避免几轮前刚问过的节点主问句再被追加
                 recent_bots = self._recent_bots(state, n=3)

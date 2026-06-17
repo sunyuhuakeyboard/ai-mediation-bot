@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.engines.call_state import StateStore
 from app.engines.classifier import IntentClassifier
 from app.engines.compliance import ComplianceEngine
+from app.engines.edelivery_orchestrator import ElectronicDeliveryOrchestrator
 from app.engines.llm_client import LLMClient
 from app.engines.orchestrator import DialogOrchestrator
 from app.services.call_service import CallService, MemRunStore
@@ -98,7 +99,10 @@ async def lifespan(app: FastAPI):
 
     classifier = IntentClassifier(s, http=classifier_http, llm=llm)
     compliance = ComplianceEngine()
-    orchestrator = DialogOrchestrator(cache, classifier, llm, compliance, s)
+    if s.conversation_scene == "electronic_delivery":
+        orchestrator = ElectronicDeliveryOrchestrator(s)
+    else:
+        orchestrator = DialogOrchestrator(cache, classifier, llm, compliance, s)
     quality = QualityService(s, call_service, cache, llm=llm)
 
     app.state.session_factory = session_factory
@@ -106,7 +110,7 @@ async def lifespan(app: FastAPI):
     app.state.call_service = call_service
     app.state.quality_service = quality
     app.state.orchestrator = orchestrator
-    logger.info("startup complete: knowledge version=%s", cache.version)
+    logger.info("startup complete: scene=%s knowledge version=%s", s.conversation_scene, cache.version)
 
     try:
         yield
@@ -140,7 +144,8 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     async def healthz():
         return {"status": "ok", "knowledge_version": app.state.cache.version,
-                "offline_mode": s.offline_mode}
+                "offline_mode": s.offline_mode,
+                "conversation_scene": s.conversation_scene}
 
     @app.get("/metrics")
     async def metrics_endpoint():

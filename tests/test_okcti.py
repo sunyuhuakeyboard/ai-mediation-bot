@@ -3,6 +3,7 @@ import os
 
 os.environ.setdefault("OFFLINE_MODE", "1")
 os.environ.setdefault("LLM_API_KEY", "")
+os.environ["CONVERSATION_SCENE"] = "mediation"
 
 from fastapi.testclient import TestClient  # noqa: E402
 

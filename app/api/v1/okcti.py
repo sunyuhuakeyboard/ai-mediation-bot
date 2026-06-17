@@ -271,6 +271,27 @@ def _customer_phone(req: OkctiRequest) -> str:
     return req.callee if req.direct == 1 and req.callee else req.caller
 
 
+def _request_case_overrides(req: OkctiRequest, s: Settings) -> dict:
+    raw = {
+        "debtor_name": req.extra_value("debtor_name") or req.extra_value("name"),
+        "respondent_name": req.extra_value("respondent_name") or req.extra_value("debtor_name") or req.extra_value("name"),
+        "debtor_gender": req.extra_value("debtor_gender"),
+        "platform_name": req.extra_value("platform_name"),
+        "creditor_name": req.extra_value("creditor_name"),
+        "mediation_org": req.extra_value("mediation_org"),
+        "official_verify_channel": req.extra_value("official_verify_channel"),
+        "total_amount": req.extra_value("total_amount"),
+        "court_name": req.extra_value("court_name"),
+        "court_contact": req.extra_value("court_contact"),
+        "plaintiff_name": req.extra_value("plaintiff_name") or req.extra_value("creditor_name"),
+        "lawsuit_type": req.extra_value("lawsuit_type"),
+        "claim_amount": req.extra_value("claim_amount") or req.extra_value("total_amount"),
+        "respondent_dir": req.extra_value("respondent_dir") or req.extra_value("address"),
+        "notice_status": req.extra_value("notice_status"),
+    }
+    return {k: v for k, v in raw.items() if v not in (None, "")}
+
+
 async def _case_from_request(req: OkctiRequest, calls, s: Settings) -> dict:
     explicit_case = req.extra_value("case")
     if isinstance(explicit_case, dict):
@@ -280,6 +301,8 @@ async def _case_from_request(req: OkctiRequest, calls, s: Settings) -> dict:
     if case_id:
         found = await calls.get_case(case_id)
         if found:
+            found = dict(found)
+            found.update(_request_case_overrides(req, s))
             return found
 
     phone = _customer_phone(req)
@@ -287,6 +310,8 @@ async def _case_from_request(req: OkctiRequest, calls, s: Settings) -> dict:
         "case_id": case_id or req.callid,
         "debtor_name": (req.extra_value("debtor_name") or req.extra_value("name")
                         or s.okcti_default_debtor_name),
+        "respondent_name": (req.extra_value("respondent_name") or req.extra_value("debtor_name")
+                            or req.extra_value("name") or s.edelivery_default_respondent_name),
         "debtor_gender": req.extra_value("debtor_gender") or "",
         "debtor_phone": phone,
         "platform_name": req.extra_value("platform_name") or s.okcti_default_platform_name,
@@ -294,6 +319,15 @@ async def _case_from_request(req: OkctiRequest, calls, s: Settings) -> dict:
         "mediation_org": req.extra_value("mediation_org") or s.okcti_default_mediation_org,
         "official_verify_channel": req.extra_value("official_verify_channel") or "官方渠道",
         "total_amount": req.extra_value("total_amount"),
+        "court_name": req.extra_value("court_name") or s.edelivery_default_court_name,
+        "court_contact": req.extra_value("court_contact") or s.edelivery_default_court_contact,
+        "plaintiff_name": (req.extra_value("plaintiff_name") or req.extra_value("creditor_name")
+                           or s.edelivery_default_plaintiff_name),
+        "lawsuit_type": req.extra_value("lawsuit_type") or s.edelivery_default_lawsuit_type,
+        "claim_amount": req.extra_value("claim_amount") or req.extra_value("total_amount")
+        or s.edelivery_default_claim_amount,
+        "respondent_dir": (req.extra_value("respondent_dir") or req.extra_value("address")
+                           or s.edelivery_default_respondent_dir),
         "notice_status": req.extra_value("notice_status") or "",
         "extra": {
             "okcti": {
