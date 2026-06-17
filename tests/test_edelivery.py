@@ -10,10 +10,10 @@ from app.engines.edelivery_orchestrator import (ED_ADDRESS, ED_ADDRESS_NEW,
 
 CASE = {
     "case_id": "CASE_ED_001",
-    "respondent_name": "刘某华",
+    "respondent_name": "刘立华",
     "respondent_dir": "贵阳市观山湖区林城东路205号405室",
     "plaintiff_name": "贵阳天某有限公司",
-    "court_name": "某某区人民法院",
+    "court_name": "杭州市拱墅区人民法院",
     "court_contact": "0851-376428",
     "lawsuit_type": "买卖合同纠纷",
     "claim_amount": "12500元",
@@ -29,8 +29,8 @@ async def test_edelivery_agree_main_flow_ends_call():
     state = CallState(call_id="ED_T1", case=dict(CASE))
 
     opening = await orch.opening(state)
-    assert "某某区人民法院立案庭" in opening.reply
-    assert "刘某华" in opening.reply
+    assert "杭州市拱墅区人民法院立案庭" in opening.reply
+    assert "刘立华" in opening.reply
 
     r1 = await orch.handle_turn(state, "是我，什么事")
     assert r1.node_after == ED_EDELIVERY
@@ -87,7 +87,7 @@ async def test_edelivery_identity_denial_does_not_advance_to_notice():
 
     assert denied.node_after == ED_NON_SELF
     assert denied.intent == "NOT_SELF"
-    assert "认识刘某华" in denied.reply
+    assert "认识刘立华" in denied.reply
     assert state.slots["identity_confirmed"] is False
     assert state.slots["not_self"] is True
     assert state.ended is False
