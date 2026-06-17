@@ -78,6 +78,64 @@ async def test_edelivery_faq_answers_then_returns_to_delivery_confirmation():
     assert state.ended is False
 
 
+async def test_edelivery_explains_delivery_method_before_confirmation():
+    orch = _orch()
+    state = CallState(call_id="ED_T3_METHOD", case=dict(CASE))
+    await orch.opening(state)
+    await orch.handle_turn(state, "我是")
+
+    answer = await orch.handle_turn(state, "怎么送的？")
+
+    assert answer.node_after == ED_EDELIVERY
+    assert answer.intent == "FAQ"
+    assert "线上向您发送诉讼文书" in answer.reply
+    assert "是否同意本案采用电子送达" in answer.reply
+    assert state.ended is False
+
+
+async def test_edelivery_topic_keyword_explains_instead_of_repeating_prompt():
+    orch = _orch()
+    state = CallState(call_id="ED_T3_TOPIC", case=dict(CASE))
+    await orch.opening(state)
+    await orch.handle_turn(state, "是我")
+
+    answer = await orch.handle_turn(state, "电子送达。")
+
+    assert answer.node_after == ED_EDELIVERY
+    assert answer.intent == "FAQ"
+    assert "微法院" in answer.reply
+    assert answer.reply != "现向你确认，是否同意本案采用电子送达方式接收诉讼文书？电子送达与纸质送达具有同等法律效力。"
+    assert state.ended is False
+
+
+async def test_edelivery_colloquial_agreement_after_explanation_ends_call():
+    orch = _orch()
+    state = CallState(call_id="ED_T3_AGREE", case=dict(CASE))
+    await orch.opening(state)
+    await orch.handle_turn(state, "我是")
+    await orch.handle_turn(state, "怎么送的？")
+
+    agreed = await orch.handle_turn(state, "可以啊。")
+
+    assert agreed.end_call is True
+    assert agreed.intent == "AGREE_EDELIVERY"
+    assert agreed.call_result == "同意电子送达"
+
+
+async def test_edelivery_asr_followup_about_method_gets_answer():
+    orch = _orch()
+    state = CallState(call_id="ED_T3_ASR", case=dict(CASE))
+    await orch.opening(state)
+    await orch.handle_turn(state, "我是")
+
+    answer = await orch.handle_turn(state, "这样子送的。")
+
+    assert answer.node_after == ED_EDELIVERY
+    assert answer.intent == "FAQ"
+    assert "线上向您发送诉讼文书" in answer.reply
+    assert state.ended is False
+
+
 async def test_edelivery_identity_denial_does_not_advance_to_notice():
     orch = _orch()
     state = CallState(call_id="ED_T4", case=dict(CASE))

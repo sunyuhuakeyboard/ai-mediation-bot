@@ -33,7 +33,8 @@ _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 _AFFIRM_EXACT = {
     "是", "是的", "对", "对的", "嗯", "嗯嗯", "本人", "我本人", "我是本人",
     "是本人", "是我", "我就是", "没错", "没错的", "可以", "同意", "接受",
-    "行", "好的", "好", "没问题",
+    "行", "好的", "好", "没问题", "可以啊", "可以的", "行啊", "行的",
+    "好啊", "好呀", "同意啊", "同意的", "接受啊", "接受的",
 }
 _AFFIRM_PHRASES = (
     "我是", "是我", "我就是", "我是本人", "是我本人", "对我是", "是的是我", "没错我是",
@@ -44,8 +45,11 @@ _KNOWS_PERSON = ("认识", "家人", "亲属", "朋友", "同事", "我老公", 
 _CALLBACK = ("不方便", "稍后", "晚点", "等会", "改天", "在忙", "开会", "回电", "再打")
 _AGITATED = ("骗子", "诈骗", "骗人", "滚", "有病", "投诉", "举报", "别打")
 _PROXY = ("律师", "代理人", "委托", "授权")
-_REFUSE_ES = ("不同意", "拒绝", "不同意电子", "纸质", "邮寄", "不要电子", "不接受电子")
-_AGREE_ES_EXACT = {"同意", "接受", "可以", "行", "好的", "好", "没问题"}
+_REFUSE_ES = ("不同意", "拒绝", "不同意电子", "纸质", "邮寄", "不要电子", "不接受电子", "不想电子")
+_AGREE_ES_EXACT = {
+    "同意", "接受", "可以", "行", "好的", "好", "没问题", "可以啊", "可以的",
+    "行啊", "行的", "好啊", "好呀", "同意啊", "同意的", "接受啊", "接受的",
+}
 _AGREE_ES_PHRASES = ("同意电子", "接受电子", "可以电子", "电子送达可以", "电子送达同意")
 _ADDR_WRONG = ("不是", "不对", "错", "错误", "不是这个地址", "搬家", "不在那")
 _REFUSE_ADDR = ("不提供", "不告诉", "不知道", "没有地址", "不方便说")
@@ -68,7 +72,12 @@ def _is_identity_denial(text: str) -> bool:
 
 def _is_affirm(text: str) -> bool:
     t = _norm(text)
-    if not t or _is_identity_denial(t) or any(w in t for w in ("不同意", "不接受", "不可以", "不行", "拒绝")):
+    if (
+        not t
+        or _is_identity_denial(t)
+        or any(w in t for w in ("不同意", "不接受", "不可以", "不行", "拒绝"))
+        or any(w in t for w in ("是不是", "是否", "可以吗", "行吗"))
+    ):
         return False
     if t in _AFFIRM_EXACT:
         return True
@@ -138,7 +147,7 @@ class ElectronicDeliveryOrchestrator:
 
         answer = self._faq_answer(text, state.current_node, ctx)
         if answer:
-            reply = self._clean(answer + self._prompt_for(state.current_node, ctx))
+            reply = self._clean(answer + self._followup_for(state.current_node, ctx))
             return self._finish(state, reply, "FAQ", "ED_FAQ", "FAQ", node_before, state.current_node, started)
 
         node = state.current_node
@@ -297,6 +306,19 @@ class ElectronicDeliveryOrchestrator:
                          node_before, started, "地址确认")
 
     def _faq_answer(self, text: str, node: str, ctx: dict) -> str:
+        t = _norm(text)
+        if self._is_edelivery_method_question(t):
+            return "电子送达是法院通过人民法院在线服务、微法院或预留手机渠道，线上向您发送诉讼文书。"
+        if self._is_edelivery_channel_question(t):
+            return "同意后，您可在微信搜索微法院，实名认证登录后查看和下载案件材料、传票等诉讼文书。"
+        if self._is_edelivery_must_question(t):
+            return "电子送达需要您自愿确认；如不同意，法院会依法采用邮寄或直接送达等方式。"
+        if self._is_edelivery_help_question(t):
+            return "如果您不会操作微法院，可以先选择纸质送达，或拨打法院电话请工作人员协助。"
+        if self._is_edelivery_timing_question(t):
+            return "电子送达以系统发送和记录的时间为准，您登录后能查看具体文书和送达记录。"
+        if self._is_edelivery_safety_question(t):
+            return f"这是{ctx['court_name']}的诉讼文书送达通知，您也可拨打{ctx['court_contact']}核实。"
         if "机器人" in text or "真人" in text:
             return f"我是法院的智能法官助理，负责诉讼文书电子送达通知；如需人工服务，可拨打{ctx['court_contact']}。"
         if any(w in text for w in ("怎么知道", "核实", "诈骗", "真假", "法院电话", "官方")):
@@ -305,7 +327,7 @@ class ElectronicDeliveryOrchestrator:
             return f"原告是{ctx['plaintiff_name']}，案由是{ctx['lawsuit_type']}，诉讼请求金额{ctx['claim_amount']}，案件编号{ctx['case_id']}。"
         if any(w in text for w in ("还钱", "还了", "还过", "争议", "为什么起诉")):
             return f"您可在答辩期内向{ctx['court_name']}提交证明材料，法院会依法审查。我这边只负责送达通知。"
-        if any(w in text for w in ("材料没收到", "起诉材料", "没收到材料", "文书没收到")):
+        if any(w in text for w in ("材料没收到", "起诉材料", "没收到材料", "文书没收到", "没收到短信", "收不到短信")):
             return f"同意电子送达后，文书会发送至微法院；也可拨打{ctx['court_contact']}联系法院领取纸质版。"
         if any(w in text for w in ("法院在哪", "怎么去法院", "法院地址")):
             return f"具体地址和开庭时间会在传票中注明，也可拨打{ctx['court_contact']}咨询法院工作人员。"
@@ -329,11 +351,49 @@ class ElectronicDeliveryOrchestrator:
             return "诉讼费通常先由原告预交，最终由败诉方承担，具体以法院判决为准。"
         if "法律效力" in text or "纸质送达一样" in text:
             return "一样的。电子送达与纸质送达具有同等法律效力，送达时间以系统记录为准。"
-        if any(w in text for w in ("发到哪里", "在哪里看", "微法院", "文书哪里看")):
-            return "同意后可在微信搜索微法院，实名认证登录后查看案件材料和后续诉讼文书。"
         if any(w in text for w in ("后悔", "改回纸质", "变更送达")):
             return f"您可拨打{ctx['court_contact']}联系{ctx['court_name']}工作人员申请变更送达方式。"
         return ""
+
+    def _is_edelivery_method_question(self, text: str) -> bool:
+        if not text:
+            return False
+        if text in ("电子送达", "线上送达", "网上送达"):
+            return True
+        return (
+            ("送" in text or "电子送达" in text)
+            and any(w in text for w in ("怎么", "如何", "咋", "什么", "怎样", "这样子", "这种", "方式"))
+        )
+
+    def _is_edelivery_channel_question(self, text: str) -> bool:
+        return any(w in text for w in (
+            "发到哪里", "发哪里", "送到哪里", "在哪里看", "哪里看", "在哪看",
+            "文书哪里看", "怎么查看", "怎么查", "怎么收", "在哪里收", "微法院",
+            "微信", "短信", "手机", "链接", "平台", "app",
+        ))
+
+    def _is_edelivery_must_question(self, text: str) -> bool:
+        return any(w in text for w in (
+            "必须同意", "一定要同意", "不同意会怎样", "不同意可以吗", "能不能不同意",
+            "可以不同意", "必须电子", "一定要电子",
+        ))
+
+    def _is_edelivery_help_question(self, text: str) -> bool:
+        return any(w in text for w in (
+            "不会操作", "不会弄", "不会用", "没有微信", "没有手机", "手机不会",
+            "老人", "弄不了", "打不开", "登不上", "收不到",
+        ))
+
+    def _is_edelivery_timing_question(self, text: str) -> bool:
+        return any(w in text for w in (
+            "什么时候算送达", "何时送达", "送达时间", "多久送达", "几天送达",
+            "什么时候收到", "多久收到",
+        ))
+
+    def _is_edelivery_safety_question(self, text: str) -> bool:
+        return any(w in text for w in (
+            "安全吗", "安全不", "可靠吗", "风险", "隐私", "泄露", "会不会被骗",
+        ))
 
     def _case_notice(self, ctx: dict) -> str:
         return f"好的，{ctx['respondent_name']}，现原告{ctx['plaintiff_name']}已就{ctx['lawsuit_type']}一案，向我院对你提起立案起诉。"
@@ -353,6 +413,15 @@ class ElectronicDeliveryOrchestrator:
             ED_CALLBACK: "请问您什么时候方便接听？",
         }
         return prompts.get(node, prompts[ED_IDENTITY])
+
+    def _followup_for(self, node: str, ctx: dict) -> str:
+        if node == ED_EDELIVERY:
+            return "了解后，请问您是否同意本案采用电子送达？"
+        if node == ED_ADDRESS:
+            return f"请问{ctx['respondent_dir']}是否为您的现住地址？"
+        if node == ED_IDENTITY:
+            return f"请问您是{ctx['respondent_name']}本人吗？"
+        return self._prompt_for(node, ctx)
 
     def _ctx(self, state: CallState) -> dict:
         case = _flatten_case(state.case or {})
