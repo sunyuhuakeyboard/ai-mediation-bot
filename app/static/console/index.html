@@ -31,6 +31,7 @@
         <button class="nav-item active" type="button" data-tab="dialog">对话测试</button>
         <button class="nav-item" type="button" data-tab="cases">案件</button>
         <button class="nav-item" type="button" data-tab="calls">通话</button>
+        <button class="nav-item" type="button" data-tab="policy">策略话术</button>
         <button class="nav-item" type="button" data-tab="knowledge">知识库</button>
         <button class="nav-item" type="button" data-tab="dnc">DNC</button>
         <button class="nav-item" type="button" data-tab="okcti">OKCTI</button>
@@ -241,6 +242,208 @@
               <pre id="knowledgeUpdateOutput" class="json-box compact">{}</pre>
             </div>
           </div>
+        </section>
+
+        <section class="panel" data-panel="policy">
+          <div class="surface">
+            <div class="section-head">
+              <h2>策略话术配置</h2>
+              <div class="inline-actions">
+                <span id="policyConfigStatus" class="subtle-pill">未加载</span>
+                <button id="refreshPolicyConfig" type="button" class="ghost-btn">刷新</button>
+                <button id="newPolicyItem" type="button" class="primary-btn">新建</button>
+              </div>
+            </div>
+
+            <div class="policy-toolbar">
+              <label>
+                <span>配置类型</span>
+                <select id="policyKind">
+                  <option value="templates">话术模板</option>
+                  <option value="strategies">调解策略</option>
+                </select>
+              </label>
+              <label>
+                <span>搜索</span>
+                <input id="policySearch" placeholder="ID / 名称 / 节点 / 意图" autocomplete="off" />
+              </label>
+              <label>
+                <span>节点</span>
+                <select id="policyNodeFilter">
+                  <option value="">全部节点</option>
+                </select>
+              </label>
+              <label>
+                <span>策略</span>
+                <select id="policyStrategyFilter">
+                  <option value="">全部策略</option>
+                </select>
+              </label>
+              <label>
+                <span>状态</span>
+                <select id="policyStatusFilter">
+                  <option value="">全部状态</option>
+                  <option value="enabled">启用</option>
+                  <option value="disabled">停用</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="policy-layout">
+              <aside class="policy-list-wrap" aria-label="策略话术列表">
+                <div class="list-summary">
+                  <strong id="policyListCount">0</strong>
+                  <span id="policyListHint">条配置</span>
+                </div>
+                <div id="policyList" class="policy-list"></div>
+              </aside>
+
+              <div class="policy-editor">
+                <form id="templateEditor" class="policy-form">
+                  <div class="section-head editor-head">
+                    <h2>话术模板</h2>
+                    <div class="inline-actions">
+                      <span id="templateDirtyState" class="subtle-pill">未选择</span>
+                      <button id="duplicateTemplate" type="button" class="ghost-btn">复制</button>
+                      <button class="primary-btn" type="submit">保存并热更新</button>
+                    </div>
+                  </div>
+                  <div class="form-grid dense">
+                    <label>
+                      <span>模板ID</span>
+                      <input id="templateId" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>状态</span>
+                      <select id="templateEnabled">
+                        <option value="true">启用</option>
+                        <option value="false">停用</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>适用节点</span>
+                      <input id="templateNodeId" list="policyNodeOptions" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>策略ID</span>
+                      <input id="templateStrategyId" list="policyStrategyOptions" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>意图/抗性</span>
+                      <input id="templateIntent" list="policyIntentOptions" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>合规等级</span>
+                      <select id="templateComplianceLevel">
+                        <option value="高">高</option>
+                        <option value="中">中</option>
+                        <option value="低">低</option>
+                      </select>
+                    </label>
+                    <label class="wide">
+                      <span>话术文本</span>
+                      <textarea id="templateText" rows="5" spellcheck="false"></textarea>
+                    </label>
+                    <label class="wide">
+                      <span>同义变体</span>
+                      <textarea id="templateVariants" rows="7" spellcheck="false" placeholder="每行一条"></textarea>
+                    </label>
+                    <label>
+                      <span>变量</span>
+                      <input id="templateVariables" placeholder="name, total_amount" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>质检分</span>
+                      <input id="templateQualityScore" type="number" min="0" max="100" step="1" />
+                    </label>
+                    <label class="check-row">
+                      <input id="templateCanDirect" type="checkbox" />
+                      <span>可模板直出</span>
+                    </label>
+                    <label class="check-row">
+                      <input id="templateNeedRewrite" type="checkbox" />
+                      <span>允许LLM改写</span>
+                    </label>
+                    <label class="wide">
+                      <span>备注</span>
+                      <input id="templateRemark" autocomplete="off" />
+                    </label>
+                  </div>
+                </form>
+
+                <form id="strategyEditor" class="policy-form hidden">
+                  <div class="section-head editor-head">
+                    <h2>调解策略</h2>
+                    <div class="inline-actions">
+                      <span id="strategyDirtyState" class="subtle-pill">未选择</span>
+                      <button id="duplicateStrategy" type="button" class="ghost-btn">复制</button>
+                      <button class="primary-btn" type="submit">保存并热更新</button>
+                    </div>
+                  </div>
+                  <div class="form-grid dense">
+                    <label>
+                      <span>策略ID</span>
+                      <input id="strategyId" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>策略名称</span>
+                      <input id="strategyName" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>适用节点</span>
+                      <input id="strategyNodes" placeholder="N018,N019" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>适用意图/抗性</span>
+                      <input id="strategyIntents" placeholder="NO_MONEY,REQUEST_INSTALLMENT" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>是否需要LLM</span>
+                      <select id="strategyNeedLlm">
+                        <option value="否">否</option>
+                        <option value="可">可</option>
+                        <option value="是">是</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>风险等级</span>
+                      <select id="strategyRiskLevel">
+                        <option value="低">低</option>
+                        <option value="中">中</option>
+                        <option value="高">高</option>
+                        <option value="严重">严重</option>
+                      </select>
+                    </label>
+                    <label class="wide">
+                      <span>策略目标</span>
+                      <input id="strategyGoal" autocomplete="off" />
+                    </label>
+                    <label class="wide">
+                      <span>策略指令</span>
+                      <textarea id="strategyInstruction" rows="7" spellcheck="false"></textarea>
+                    </label>
+                    <label>
+                      <span>允许动作</span>
+                      <input id="strategyAllowedActions" autocomplete="off" />
+                    </label>
+                    <label>
+                      <span>禁止动作</span>
+                      <input id="strategyForbiddenActions" autocomplete="off" />
+                    </label>
+                    <label class="wide">
+                      <span>失败回退话术ID</span>
+                      <input id="strategyFallbackTemplateId" list="policyTemplateOptions" autocomplete="off" />
+                    </label>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+
+          <datalist id="policyNodeOptions"></datalist>
+          <datalist id="policyStrategyOptions"></datalist>
+          <datalist id="policyIntentOptions"></datalist>
+          <datalist id="policyTemplateOptions"></datalist>
         </section>
 
         <section class="panel" data-panel="dnc">

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from sqlalchemy import select
 
 from app.api.deps import get_app_settings, get_cache, get_call_service
 
@@ -23,6 +24,18 @@ _MODEL_MAP = {
     "labels": ("IntentLabel", "label_id"),
     "nodes": ("SopNode", "node_id"),
 }
+
+_SEED_MAP = {
+    "templates": "TEMPLATES",
+    "routes": "ROUTES",
+    "strategies": "STRATEGIES",
+    "labels": "LABELS",
+    "nodes": "NODES",
+}
+
+
+def _model_to_dict(obj) -> dict:
+    return {c.key: getattr(obj, c.key) for c in obj.__table__.columns}
 
 
 @router.get("/knowledge/version")
@@ -44,6 +57,25 @@ async def knowledge_table(table: str, cache=Depends(get_cache)):
         raise HTTPException(404, f"unknown table {table}; one of {sorted(_TABLES) + ['routes', 'compliance']}")
     data = getattr(snap, attr)
     return {table: data}
+
+
+@router.get("/knowledge/editable/{table}")
+async def editable_knowledge_table(table: str, request: Request,
+                                   settings=Depends(get_app_settings)):
+    if table not in _MODEL_MAP:
+        raise HTTPException(404, f"table must be one of {sorted(_MODEL_MAP)}")
+    if settings.offline_mode:
+        from app.knowledge import seed as S
+        rows = getattr(S, _SEED_MAP[table])
+        return {table: rows, "mode": "seed", "editable": False}
+
+    model_name, pk_field = _MODEL_MAP[table]
+    from app.db import models as M
+    model = getattr(M, model_name)
+    session_factory = request.app.state.session_factory
+    async with session_factory() as session:
+        rows = (await session.execute(select(model).order_by(getattr(model, pk_field)))).scalars().all()
+    return {table: [_model_to_dict(row) for row in rows], "mode": "db", "editable": True}
 
 
 @router.put("/knowledge/{table}/{pk}")
