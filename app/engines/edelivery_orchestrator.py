@@ -30,15 +30,23 @@ _PHONE_RE = re.compile(r"(?:\+?86[- ]?)?(1[3-9]\d{9}|0\d{2,3}[- ]?\d{7,8})")
 _AMOUNT_RE = re.compile(r"\d+(?:,\d{3})*(?:\.\d+)?")
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff]")
 
-_AFFIRM = ("是", "我是", "是我", "本人", "我就是", "没错", "对", "对的", "是的", "可以", "同意", "接受", "行", "好的")
-_DENY_IDENTITY = ("不是本人", "不是我", "我不是", "打错", "找错", "号码错", "不认识")
+_AFFIRM_EXACT = {
+    "是", "是的", "对", "对的", "嗯", "嗯嗯", "本人", "我本人", "我是本人",
+    "是本人", "是我", "我就是", "没错", "没错的", "可以", "同意", "接受",
+    "行", "好的", "好", "没问题",
+}
+_AFFIRM_PHRASES = (
+    "我是", "是我", "我就是", "我是本人", "是我本人", "对我是", "是的是我", "没错我是",
+)
+_DENY_IDENTITY = ("不是", "不是本人", "不是我", "我不是", "非本人", "打错", "找错", "号码错", "不认识")
 _WRONG_NUMBER = ("打错", "找错", "号码错", "新号码", "不认识", "不认识他", "不认识她")
 _KNOWS_PERSON = ("认识", "家人", "亲属", "朋友", "同事", "我老公", "我老婆", "我儿子", "我女儿")
 _CALLBACK = ("不方便", "稍后", "晚点", "等会", "改天", "在忙", "开会", "回电", "再打")
 _AGITATED = ("骗子", "诈骗", "骗人", "滚", "有病", "投诉", "举报", "别打")
 _PROXY = ("律师", "代理人", "委托", "授权")
 _REFUSE_ES = ("不同意", "拒绝", "不同意电子", "纸质", "邮寄", "不要电子", "不接受电子")
-_AGREE_ES = ("同意", "接受", "可以电子", "电子送达可以", "可以", "行", "好的", "没问题")
+_AGREE_ES_EXACT = {"同意", "接受", "可以", "行", "好的", "好", "没问题"}
+_AGREE_ES_PHRASES = ("同意电子", "接受电子", "可以电子", "电子送达可以", "电子送达同意")
 _ADDR_WRONG = ("不是", "不对", "错", "错误", "不是这个地址", "搬家", "不在那")
 _REFUSE_ADDR = ("不提供", "不告诉", "不知道", "没有地址", "不方便说")
 
@@ -47,9 +55,31 @@ def _has_any(text: str, words: tuple[str, ...]) -> bool:
     return any(w in text for w in words)
 
 
+def _norm(text: str) -> str:
+    return re.sub(r"[\s，。！？!?；;,.、]", "", text or "")
+
+
+def _is_identity_denial(text: str) -> bool:
+    t = _norm(text)
+    if not t or "是不是" in t or "是否" in t:
+        return False
+    return any(w in t for w in _DENY_IDENTITY)
+
+
 def _is_affirm(text: str) -> bool:
-    t = re.sub(r"[\s，。！？!?；;,.]", "", text)
-    return any(w in t for w in _AFFIRM)
+    t = _norm(text)
+    if not t or _is_identity_denial(t) or any(w in t for w in ("不同意", "不接受", "不可以", "不行", "拒绝")):
+        return False
+    if t in _AFFIRM_EXACT:
+        return True
+    return any(w in t for w in _AFFIRM_PHRASES)
+
+
+def _is_edelivery_agree(text: str) -> bool:
+    t = _norm(text)
+    if not t or _has_any(t, _REFUSE_ES) or _is_identity_denial(t):
+        return False
+    return t in _AGREE_ES_EXACT or any(w in t for w in _AGREE_ES_PHRASES)
 
 
 def _fmt_amount(value: Any) -> str:
@@ -144,8 +174,9 @@ class ElectronicDeliveryOrchestrator:
             reply = "您确认已授权代理人处理本案吗？如确认，请告知代理人联系电话，我记录后由法院联系。"
             return self._finish(state, reply, "ASK_PROXY", "ED_R_PROXY", "PROXY",
                                 node_before, ED_PROXY_PHONE, started)
-        if _has_any(text, _DENY_IDENTITY):
+        if _is_identity_denial(text):
             state.slots["not_self"] = True
+            state.slots["identity_confirmed"] = False
             state.current_node = ED_NON_SELF
             reply = f"您认识{ctx['respondent_name']}吗？他名下有一件诉讼案件需要本人处理。"
             return self._finish(state, reply, "ASK_RELATION", "ED_R_NOT_SELF", "NOT_SELF",
@@ -173,13 +204,13 @@ class ElectronicDeliveryOrchestrator:
             reply = self._case_notice(ctx) + self._edelivery_question(ctx)
             return self._finish(state, reply, "NOTICE_AND_CONFIRM", "ED_R_RECOVER", "CONFIRM_SELF",
                                 node_before, ED_EDELIVERY, started)
+        if _has_any(text, _WRONG_NUMBER):
+            return self._end(state, "不好意思，可能号码搞错了，再见。", "WRONG_NUMBER",
+                             "ED_R_WRONG", "NOT_KNOW", node_before, started, "号码错误")
         if _has_any(text, _KNOWS_PERSON):
             reply = f"麻烦您转告{ctx['respondent_name']}，我院有涉及他本人的诉讼事项需要核实办理，请尽快拨打{ctx['court_contact']}联系{ctx['court_name']}处理。再见。"
             return self._end(state, reply, "NON_SELF_RELAY", "ED_R_RELAY", "KNOWS_PERSON",
                              node_before, started, "非本人转告")
-        if _has_any(text, _WRONG_NUMBER):
-            return self._end(state, "不好意思，可能号码搞错了，再见。", "WRONG_NUMBER",
-                             "ED_R_WRONG", "NOT_KNOW", node_before, started, "号码错误")
         reply = f"为避免打扰，我再确认一下，您是否认识{ctx['respondent_name']}？"
         return self._finish(state, reply, "ASK_RELATION", "ED_R_REL_RETRY", "UNKNOWN",
                             node_before, ED_NON_SELF, started)
@@ -214,13 +245,20 @@ class ElectronicDeliveryOrchestrator:
                          node_before, started, "预约回访")
 
     def _handle_edelivery(self, state, text, ctx, node_before, started):
+        if _is_identity_denial(text):
+            state.slots["identity_confirmed"] = False
+            state.slots["not_self"] = True
+            state.current_node = ED_NON_SELF
+            reply = f"好的，那我先更正一下。请问您认识{ctx['respondent_name']}吗？他名下有一件诉讼案件需要本人处理。"
+            return self._finish(state, reply, "ASK_RELATION", "ED_R_ES_NOT_SELF", "NOT_SELF",
+                                node_before, ED_NON_SELF, started)
         if _has_any(text, _REFUSE_ES):
             state.slots["electronic_delivery_agreed"] = False
             state.current_node = ED_ADDRESS
             reply = f"已如实记录您不同意电子送达，后续我院将依法采取邮寄或直接送达方式。需要确认一下送达地址，{ctx['respondent_dir']}是否为您的现住地址？"
             return self._finish(state, reply, "ASK_ADDRESS", "ED_R_ES_REFUSE", "REFUSE_EDELIVERY",
                                 node_before, ED_ADDRESS, started)
-        if _has_any(text, _AGREE_ES) or _is_affirm(text):
+        if _is_edelivery_agree(text) or _is_affirm(text):
             state.slots["electronic_delivery_agreed"] = True
             reply = "好的，我记录您同意接受电子送达。请尽快完成微法院实名认证，及时查看案件材料和后续诉讼文书，并保持电话畅通。再见。"
             return self._end(state, reply, "EDELIVERY_AGREED", "ED_R_ES_AGREE", "AGREE_EDELIVERY",
