@@ -100,7 +100,7 @@ async def lifespan(app: FastAPI):
     classifier = IntentClassifier(s, http=classifier_http, llm=llm)
     compliance = ComplianceEngine()
     if s.conversation_scene == "electronic_delivery":
-        orchestrator = ElectronicDeliveryOrchestrator(s)
+        orchestrator = ElectronicDeliveryOrchestrator(s, llm=llm)
     else:
         orchestrator = DialogOrchestrator(cache, classifier, llm, compliance, s)
     quality = QualityService(s, call_service, cache, llm=llm)

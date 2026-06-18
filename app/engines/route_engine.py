@@ -27,21 +27,8 @@ def slot_condition_ok(cond: dict | None, slots: dict) -> bool:
 
 
 def match_route(snap, node_id: str, cls, slots: dict) -> dict[str, Any] | None:
-    keys: list[tuple[str, str]] = [(node_id, cls.intent), ("ANY", cls.intent)]
-    if cls.objection and cls.objection != cls.intent:
-        keys += [(node_id, cls.objection), ("ANY", cls.objection)]
-    keys += [(node_id, "ANY"), ("ANY", "ANY")]
-
-    seen: set[str] = set()
-    candidates: list[dict] = []
-    for k in keys:
-        for r in snap.routes_index.get(k, []):
-            rid = r["route_id"]
-            if rid in seen:
-                continue
-            seen.add(rid)
-            candidates.append(r)
-    candidates.sort(key=lambda r: r.get("priority", 50), reverse=True)
+    keys = _candidate_keys(node_id, cls)
+    candidates = _candidate_routes(snap, keys)
 
     for r in candidates:
         if not r.get("enabled", True):
@@ -52,3 +39,56 @@ def match_route(snap, node_id: str, cls, slots: dict) -> dict[str, Any] | None:
             continue
         return r
     return None
+
+
+def explain_route_miss(snap, node_id: str, cls, slots: dict,
+                       limit: int = 8) -> dict[str, Any]:
+    """返回路由未命中的候选与失败原因，供日志排查知识/状态问题。"""
+    keys = _candidate_keys(node_id, cls)
+    candidates = _candidate_routes(snap, keys)
+    out: list[dict[str, Any]] = []
+    for r in candidates[:limit]:
+        reason = "ok"
+        if not r.get("enabled", True):
+            reason = "disabled"
+        elif cls.confidence < (r.get("confidence_min") or 0.0):
+            reason = f"confidence {cls.confidence:.3f} < {r.get('confidence_min') or 0.0}"
+        elif not slot_condition_ok(r.get("slot_condition"), slots):
+            reason = f"slot_condition {r.get('slot_condition') or {}} not met"
+        out.append({
+            "route_id": r.get("route_id"),
+            "key": [r.get("current_node"), r.get("intent_label")],
+            "action": r.get("action_type"),
+            "next": r.get("next_node"),
+            "priority": r.get("priority"),
+            "confidence_min": r.get("confidence_min") or 0.0,
+            "slot_condition": r.get("slot_condition") or {},
+            "reason": reason,
+        })
+    return {
+        "keys": keys,
+        "candidate_count": len(candidates),
+        "candidates": out,
+    }
+
+
+def _candidate_keys(node_id: str, cls) -> list[tuple[str, str]]:
+    keys: list[tuple[str, str]] = [(node_id, cls.intent), ("ANY", cls.intent)]
+    if cls.objection and cls.objection != cls.intent:
+        keys += [(node_id, cls.objection), ("ANY", cls.objection)]
+    keys += [(node_id, "ANY"), ("ANY", "ANY")]
+    return keys
+
+
+def _candidate_routes(snap, keys: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    candidates: list[dict] = []
+    for k in keys:
+        for r in snap.routes_index.get(k, []):
+            rid = r["route_id"]
+            if rid in seen:
+                continue
+            seen.add(rid)
+            candidates.append(r)
+    candidates.sort(key=lambda r: r.get("priority", 50), reverse=True)
+    return candidates

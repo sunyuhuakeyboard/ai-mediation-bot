@@ -53,6 +53,10 @@ _AGREE_ES_EXACT = {
 _AGREE_ES_PHRASES = ("同意电子", "接受电子", "可以电子", "电子送达可以", "电子送达同意")
 _ADDR_WRONG = ("不是", "不对", "错", "错误", "不是这个地址", "搬家", "不在那")
 _REFUSE_ADDR = ("不提供", "不告诉", "不知道", "没有地址", "不方便说")
+_SERVICE_REFUSAL_HINTS = (
+    "无法提供该服务", "暂时无法提供", "不能提供该服务", "无法提供服务",
+    "无法处理该请求", "不能处理该请求", "无法协助", "不能协助",
+)
 
 
 def _has_any(text: str, words: tuple[str, ...]) -> bool:
@@ -112,8 +116,9 @@ def _flatten_case(case: dict) -> dict:
 
 
 class ElectronicDeliveryOrchestrator:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, llm=None) -> None:
         self.s = settings
+        self.llm = llm
 
     async def opening(self, state: CallState) -> TurnResult:
         state.current_node = ED_IDENTITY
@@ -152,27 +157,28 @@ class ElectronicDeliveryOrchestrator:
 
         node = state.current_node
         if node == ED_IDENTITY:
-            return self._handle_identity(state, text, ctx, node_before, started)
+            return await self._handle_identity(state, text, ctx, node_before, started)
         if node == ED_NON_SELF:
-            return self._handle_non_self(state, text, ctx, node_before, started)
+            return await self._handle_non_self(state, text, ctx, node_before, started)
         if node == ED_PROXY_PHONE:
-            return self._handle_proxy_phone(state, text, ctx, node_before, started)
+            return await self._handle_proxy_phone(state, text, ctx, node_before, started)
         if node == ED_PROXY_CONFIRM:
-            return self._handle_proxy_confirm(state, text, ctx, node_before, started)
+            return await self._handle_proxy_confirm(state, text, ctx, node_before, started)
         if node == ED_EDELIVERY:
-            return self._handle_edelivery(state, text, ctx, node_before, started)
+            return await self._handle_edelivery(state, text, ctx, node_before, started)
         if node == ED_ADDRESS:
-            return self._handle_address(state, text, ctx, node_before, started)
+            return await self._handle_address(state, text, ctx, node_before, started)
         if node == ED_ADDRESS_NEW:
-            return self._handle_address_new(state, text, ctx, node_before, started)
+            return await self._handle_address_new(state, text, ctx, node_before, started)
         if node == ED_CALLBACK:
-            return self._handle_callback(state, text, ctx, node_before, started)
+            return await self._handle_callback(state, text, ctx, node_before, started)
 
         state.current_node = ED_IDENTITY
-        reply = self._clean(self._prompt_for(ED_IDENTITY, ctx))
-        return self._finish(state, reply, "FALLBACK", "ED_RESET", "UNKNOWN", node_before, ED_IDENTITY, started)
+        return await self._llm_or_prompt(state, text, ctx, node_before, started,
+                                         fallback=self._prompt_for(ED_IDENTITY, ctx),
+                                         node_after=ED_IDENTITY)
 
-    def _handle_identity(self, state, text, ctx, node_before, started):
+    async def _handle_identity(self, state, text, ctx, node_before, started):
         if _has_any(text, _CALLBACK):
             state.current_node = ED_CALLBACK
             reply = "好的，请问您什么时候方便接听法院送达通知？"
@@ -201,11 +207,13 @@ class ElectronicDeliveryOrchestrator:
             reply = self._case_notice(ctx) + self._edelivery_question(ctx)
             return self._finish(state, reply, "NOTICE_AND_CONFIRM", "ED_R_SELF", "CONFIRM_SELF",
                                 node_before, ED_EDELIVERY, started)
-        reply = f"我需要先确认您的身份，才能进行下一步通知，请问您是{ctx['respondent_name']}本人吗？"
-        return self._finish(state, reply, "ASK_IDENTITY", "ED_R_ID_RETRY", "UNKNOWN",
-                            node_before, ED_IDENTITY, started)
+        return await self._llm_or_prompt(
+            state, text, ctx, node_before, started,
+            fallback=f"我需要先确认您的身份，才能进行下一步通知，请问您是{ctx['respondent_name']}本人吗？",
+            node_after=ED_IDENTITY,
+        )
 
-    def _handle_non_self(self, state, text, ctx, node_before, started):
+    async def _handle_non_self(self, state, text, ctx, node_before, started):
         if _is_affirm(text) and ("本人" in text or "我就是" in text):
             state.slots["identity_confirmed"] = True
             state.slots["not_self"] = False
@@ -220,11 +228,13 @@ class ElectronicDeliveryOrchestrator:
             reply = f"麻烦您转告{ctx['respondent_name']}，我院有涉及他本人的诉讼事项需要核实办理，请尽快拨打{ctx['court_contact']}联系{ctx['court_name']}处理。再见。"
             return self._end(state, reply, "NON_SELF_RELAY", "ED_R_RELAY", "KNOWS_PERSON",
                              node_before, started, "非本人转告")
-        reply = f"为避免打扰，我再确认一下，您是否认识{ctx['respondent_name']}？"
-        return self._finish(state, reply, "ASK_RELATION", "ED_R_REL_RETRY", "UNKNOWN",
-                            node_before, ED_NON_SELF, started)
+        return await self._llm_or_prompt(
+            state, text, ctx, node_before, started,
+            fallback=f"为避免打扰，我再确认一下，您是否认识{ctx['respondent_name']}？",
+            node_after=ED_NON_SELF,
+        )
 
-    def _handle_proxy_phone(self, state, text, ctx, node_before, started):
+    async def _handle_proxy_phone(self, state, text, ctx, node_before, started):
         match = _PHONE_RE.search(text)
         if match:
             phone = match.group(1).replace(" ", "")
@@ -233,27 +243,32 @@ class ElectronicDeliveryOrchestrator:
             reply = f"我复述一下代理人联系电话：{phone}，请问正确吗？"
             return self._finish(state, reply, "CONFIRM_PROXY_PHONE", "ED_R_PROXY_PHONE",
                                 "PROXY_PHONE", node_before, ED_PROXY_CONFIRM, started)
-        reply = "请您告知代理人的联系电话，我记录后由法院联系。"
-        return self._finish(state, reply, "ASK_PROXY_PHONE", "ED_R_PROXY_RETRY", "UNKNOWN",
-                            node_before, ED_PROXY_PHONE, started)
+        return await self._llm_or_prompt(
+            state, text, ctx, node_before, started,
+            fallback="请您告知代理人的联系电话，我记录后由法院联系。",
+            node_after=ED_PROXY_PHONE,
+        )
 
-    def _handle_proxy_confirm(self, state, text, ctx, node_before, started):
+    async def _handle_proxy_confirm(self, state, text, ctx, node_before, started):
         if _is_affirm(text):
             phone = state.slots.get("respondent_phone_proxy") or ""
             return self._end(state, f"好的，代理人联系电话{phone}我已记录，法院会联系您的代理人。谢谢，再见。",
                              "PROXY_RECORDED", "ED_R_PROXY_OK", "PROXY_CONFIRMED",
                              node_before, started, "代理人处理")
         state.current_node = ED_PROXY_PHONE
-        return self._finish(state, "好的，请您重新说一下代理人的联系电话。", "ASK_PROXY_PHONE",
-                            "ED_R_PROXY_FIX", "PROXY_PHONE_RETRY", node_before, ED_PROXY_PHONE, started)
+        return await self._llm_or_prompt(
+            state, text, ctx, node_before, started,
+            fallback="好的，请您重新说一下代理人的联系电话。",
+            node_after=ED_PROXY_PHONE,
+        )
 
-    def _handle_callback(self, state, text, ctx, node_before, started):
+    async def _handle_callback(self, state, text, ctx, node_before, started):
         state.slots["callback_time"] = text
         return self._end(state, f"好的，我记录您方便的时间是{text}，后续法院会再联系您。再见。",
                          "CALLBACK_RECORDED", "ED_R_CALLBACK_OK", "CALLBACK_TIME",
                          node_before, started, "预约回访")
 
-    def _handle_edelivery(self, state, text, ctx, node_before, started):
+    async def _handle_edelivery(self, state, text, ctx, node_before, started):
         if _is_identity_denial(text):
             state.slots["identity_confirmed"] = False
             state.slots["not_self"] = True
@@ -272,11 +287,13 @@ class ElectronicDeliveryOrchestrator:
             reply = "好的，我记录您同意接受电子送达。请尽快完成微法院实名认证，及时查看案件材料和后续诉讼文书，并保持电话畅通。再见。"
             return self._end(state, reply, "EDELIVERY_AGREED", "ED_R_ES_AGREE", "AGREE_EDELIVERY",
                              node_before, started, "同意电子送达")
-        reply = self._edelivery_question(ctx)
-        return self._finish(state, reply, "ASK_EDELIVERY", "ED_R_ES_RETRY", "UNKNOWN",
-                            node_before, ED_EDELIVERY, started)
+        return await self._llm_or_prompt(
+            state, text, ctx, node_before, started,
+            fallback=self._edelivery_question(ctx),
+            node_after=ED_EDELIVERY,
+        )
 
-    def _handle_address(self, state, text, ctx, node_before, started):
+    async def _handle_address(self, state, text, ctx, node_before, started):
         if _has_any(text, _REFUSE_ADDR):
             reply = "您可以不提供地址，法院将按身份证登记地址依法送达。特此告知，再见。"
             return self._end(state, reply, "ADDRESS_REFUSED", "ED_R_ADDR_REFUSE", "REFUSE_ADDRESS",
@@ -291,11 +308,13 @@ class ElectronicDeliveryOrchestrator:
             reply = "好的，已记录。请保持通讯地址可正常收件、电话畅通，也可自行登录微法院查询案件信息。再见。"
             return self._end(state, reply, "ADDRESS_CONFIRMED", "ED_R_ADDR_OK", "ADDRESS_CONFIRMED",
                              node_before, started, "地址确认")
-        reply = f"我再确认一下，{ctx['respondent_dir']}是否为您的现住地址？"
-        return self._finish(state, reply, "ASK_ADDRESS", "ED_R_ADDR_RETRY", "UNKNOWN",
-                            node_before, ED_ADDRESS, started)
+        return await self._llm_or_prompt(
+            state, text, ctx, node_before, started,
+            fallback=f"我再确认一下，{ctx['respondent_dir']}是否为您的现住地址？",
+            node_after=ED_ADDRESS,
+        )
 
-    def _handle_address_new(self, state, text, ctx, node_before, started):
+    async def _handle_address_new(self, state, text, ctx, node_before, started):
         if _has_any(text, _REFUSE_ADDR):
             reply = "您可以不提供地址，法院将按身份证登记地址依法送达。特此告知，再见。"
             return self._end(state, reply, "ADDRESS_REFUSED", "ED_R_ADDR_NO_NEW", "REFUSE_ADDRESS",
@@ -395,6 +414,120 @@ class ElectronicDeliveryOrchestrator:
             "安全吗", "安全不", "可靠吗", "风险", "隐私", "泄露", "会不会被骗",
         ))
 
+    async def _llm_or_prompt(self, state: CallState, user_text: str, ctx: dict,
+                             node_before: str, started: float, *,
+                             fallback: str, node_after: str) -> TurnResult:
+        """策略未命中时的商用兜底：模型只生成话术，不直接推进业务状态。"""
+        if self.llm is not None and self.s.freeform_fallback_llm:
+            try:
+                messages = self._llm_messages(state, user_text, ctx, node_after)
+                out = await self.llm.short_reply(messages, max_chars=110)
+                out = self._sanitize_llm_reply(out)
+                if out:
+                    reply = self._ensure_followup(out, node_after, ctx)
+                    logger.info(
+                        "edelivery llm fallback ok call=%s node=%s user=%r reply=%r",
+                        state.call_id, node_after, self._preview(user_text),
+                        self._preview(reply),
+                    )
+                    return self._finish(state, reply, "LLM_FALLBACK", "ED_R_LLM",
+                                        "FREEFORM", node_before, node_after, started,
+                                        llm_used=True)
+                logger.warning(
+                    "edelivery llm fallback empty call=%s node=%s user=%r",
+                    state.call_id, node_after, self._preview(user_text),
+                )
+            except Exception:
+                logger.exception(
+                    "edelivery llm fallback failed call=%s node=%s user=%r",
+                    state.call_id, node_after, self._preview(user_text),
+                )
+        reply = self._clean(fallback)
+        return self._finish(state, reply, self._fallback_action(node_after),
+                            "ED_R_RULE_FALLBACK", "UNKNOWN",
+                            node_before, node_after, started)
+
+    def _llm_messages(self, state: CallState, user_text: str, ctx: dict,
+                      node: str) -> list[dict]:
+        history = []
+        for role, text in (state.history or [])[-6:]:
+            if text:
+                history.append(f"{role}:{text}")
+        facts = {
+            "法院": ctx["court_name"],
+            "法院电话": ctx["court_contact"],
+            "当事人": ctx["respondent_name"],
+        }
+        if node not in (ED_IDENTITY, ED_NON_SELF):
+            facts.update({
+                "原告": ctx["plaintiff_name"],
+                "案由": ctx["lawsuit_type"],
+                "诉讼请求金额": ctx["claim_amount"],
+                "案件编号": ctx["case_id"],
+                "登记地址": ctx["respondent_dir"],
+            })
+        system = (
+            "你是法院立案庭的智能法官助理，正在做诉讼文书电子送达电话通知。"
+            "请只根据给定事实回答用户，不编造案号、金额、开庭时间、法院地址或处理结果。"
+            "不得提供法律结论或诉讼策略，不承诺胜诉败诉，不评价案件实体。"
+            "不得说无法提供服务、无法协助、请咨询律师这类拒绝句。"
+            "不得替用户确认同意、不同意、本人或非本人。"
+            "输出中文电话口语，一句话，80字以内，最后自然回到当前任务。"
+        )
+        user = (
+            f"当前任务：{self._llm_task(node, ctx)}\n"
+            f"案件事实：{facts}\n"
+            f"最近对话：{' | '.join(history) if history else '无'}\n"
+            f"用户刚说：{user_text}\n"
+            "请生成客服下一句。"
+        )
+        return [{"role": "system", "content": system},
+                {"role": "user", "content": user}]
+
+    def _llm_task(self, node: str, ctx: dict) -> str:
+        tasks = {
+            ED_IDENTITY: f"先保护隐私并确认是否{ctx['respondent_name']}本人，未确认前不要披露具体案情。",
+            ED_NON_SELF: f"确认对方是否认识{ctx['respondent_name']}，如认识请转告本人联系法院。",
+            ED_PROXY_PHONE: "围绕代理人或授权问题回应，并请对方提供代理人联系电话。",
+            ED_PROXY_CONFIRM: "确认代理人联系电话是否正确，如不正确请重新提供。",
+            ED_EDELIVERY: "回答用户关于电子送达、材料查看、效力、风险、操作的问题，最后询问是否同意电子送达。",
+            ED_ADDRESS: "回答纸质送达或地址相关问题，最后确认登记地址是否为现住地址。",
+            ED_ADDRESS_NEW: "请用户提供当前可以接收快递的收件地址。",
+            ED_CALLBACK: "确认用户方便接听法院通知的回访时间。",
+        }
+        return tasks.get(node, tasks[ED_IDENTITY])
+
+    def _sanitize_llm_reply(self, text: str | None) -> str:
+        text = self._clean(text or "")
+        if not text or len(text) < 4:
+            return ""
+        if any(h in text for h in _SERVICE_REFUSAL_HINTS):
+            return ""
+        if any(h in text for h in ("作为AI", "作为人工智能", "我不能", "我无法")):
+            return ""
+        return text[:120]
+
+    def _ensure_followup(self, reply: str, node: str, ctx: dict) -> str:
+        reply = reply.rstrip("。；;")
+        followup = self._followup_for(node, ctx)
+        norm_reply = _norm(reply)
+        norm_followup = _norm(followup)
+        if norm_followup and norm_followup not in norm_reply:
+            reply = f"{reply}，{followup}"
+        return self._clean(reply)
+
+    def _fallback_action(self, node: str) -> str:
+        return {
+            ED_IDENTITY: "ASK_IDENTITY",
+            ED_NON_SELF: "ASK_RELATION",
+            ED_PROXY_PHONE: "ASK_PROXY_PHONE",
+            ED_PROXY_CONFIRM: "CONFIRM_PROXY_PHONE",
+            ED_EDELIVERY: "ASK_EDELIVERY",
+            ED_ADDRESS: "ASK_ADDRESS",
+            ED_ADDRESS_NEW: "ASK_NEW_ADDRESS",
+            ED_CALLBACK: "ASK_CALLBACK",
+        }.get(node, "FALLBACK")
+
     def _case_notice(self, ctx: dict) -> str:
         return f"好的，{ctx['respondent_name']}，现原告{ctx['plaintiff_name']}已就{ctx['lawsuit_type']}一案，向我院对你提起立案起诉。"
 
@@ -458,7 +591,7 @@ class ElectronicDeliveryOrchestrator:
 
     def _finish(self, state: CallState, reply: str, action: str, route: str | None,
                 intent: str, node_before: str, node_after: str, started: float,
-                *, end_call: bool = False) -> TurnResult:
+                *, end_call: bool = False, llm_used: bool = False) -> TurnResult:
         reply = self._clean(reply)
         state.current_node = node_after
         state.visit(node_after)
@@ -466,13 +599,14 @@ class ElectronicDeliveryOrchestrator:
         state.remember("bot", reply)
         return self._result(
             state, reply, action, route, intent, node_before, node_after,
-            end_call=end_call,
+            end_call=end_call, llm_used=llm_used,
             latency_ms={"total": int((time.perf_counter() - started) * 1000)},
         )
 
     def _result(self, state: CallState, reply: str, action: str, route: str | None,
                 intent: str, node_before: str, node_after: str, *,
-                end_call: bool = False, latency_ms: dict | None = None) -> TurnResult:
+                end_call: bool = False, llm_used: bool = False,
+                latency_ms: dict | None = None) -> TurnResult:
         return TurnResult(
             call_id=state.call_id,
             reply=reply,
@@ -485,7 +619,7 @@ class ElectronicDeliveryOrchestrator:
             node_after=node_after,
             slots=dict(state.slots),
             end_call=end_call,
-            llm_used=False,
+            llm_used=llm_used,
             call_result=state.call_result,
             latency_ms=latency_ms or {},
         )
@@ -496,3 +630,10 @@ class ElectronicDeliveryOrchestrator:
         text = text.replace("#挂机#", "")
         text = re.sub(r"\s+", "", text)
         return text
+
+    @staticmethod
+    def _preview(text: str, limit: int = 120) -> str:
+        text = re.sub(r"\s+", " ", str(text or "")).strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}..."

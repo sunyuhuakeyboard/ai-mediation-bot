@@ -24,6 +24,16 @@ def _orch():
     return ElectronicDeliveryOrchestrator(Settings(offline_mode=True))
 
 
+class FakeLLM:
+    def __init__(self, reply: str | None):
+        self.reply = reply
+        self.calls = []
+
+    async def short_reply(self, messages, max_chars=None):
+        self.calls.append({"messages": messages, "max_chars": max_chars})
+        return self.reply
+
+
 async def test_edelivery_agree_main_flow_ends_call():
     orch = _orch()
     state = CallState(call_id="ED_T1", case=dict(CASE))
@@ -193,3 +203,55 @@ async def test_edelivery_non_self_not_know_routes_to_wrong_number():
     assert result.end_call is True
     assert result.call_result == "号码错误"
     assert "号码搞错" in result.reply
+
+
+async def test_edelivery_unknown_turn_uses_llm_fallback_and_stays_on_task():
+    llm = FakeLLM("我理解您的顾虑，电子送达只是接收法院文书的一种线上方式。")
+    orch = ElectronicDeliveryOrchestrator(Settings(offline_mode=True), llm=llm)
+    state = CallState(call_id="ED_T8", case=dict(CASE))
+    await orch.opening(state)
+    await orch.handle_turn(state, "我是")
+
+    result = await orch.handle_turn(state, "我还是有点搞不清楚这个东西。")
+
+    assert result.node_after == ED_EDELIVERY
+    assert result.action_type == "LLM_FALLBACK"
+    assert result.intent == "FREEFORM"
+    assert result.llm_used is True
+    assert result.end_call is False
+    assert "我理解您的顾虑" in result.reply
+    assert "是否同意本案采用电子送达" in result.reply
+    assert llm.calls
+
+
+async def test_edelivery_llm_fallback_prompt_has_commercial_guardrails():
+    llm = FakeLLM("可以先确认身份，我这边不会在未确认前披露案情。")
+    orch = ElectronicDeliveryOrchestrator(Settings(offline_mode=True), llm=llm)
+    state = CallState(call_id="ED_T9", case=dict(CASE))
+    await orch.opening(state)
+
+    result = await orch.handle_turn(state, "你们先说清楚。")
+
+    prompt_text = "\n".join(m["content"] for m in llm.calls[0]["messages"])
+    assert result.llm_used is True
+    assert "未确认前不要披露具体案情" in prompt_text
+    assert "不得替用户确认同意、不同意、本人或非本人" in prompt_text
+    assert "不编造案号、金额、开庭时间、法院地址或处理结果" in prompt_text
+    assert CASE["plaintiff_name"] not in prompt_text
+    assert CASE["lawsuit_type"] not in prompt_text
+    assert CASE["claim_amount"] not in prompt_text
+
+
+async def test_edelivery_bad_llm_fallback_is_filtered_to_rule_prompt():
+    llm = FakeLLM("对不起，我们暂时无法提供该服务。")
+    orch = ElectronicDeliveryOrchestrator(Settings(offline_mode=True), llm=llm)
+    state = CallState(call_id="ED_T10", case=dict(CASE))
+    await orch.opening(state)
+    await orch.handle_turn(state, "我是")
+
+    result = await orch.handle_turn(state, "我还是有点搞不清楚这个东西。")
+
+    assert result.llm_used is False
+    assert result.action_type == "ASK_EDELIVERY"
+    assert "暂时无法提供" not in result.reply
+    assert "是否同意本案采用电子送达方式" in result.reply

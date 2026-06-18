@@ -25,7 +25,7 @@ from app.engines.call_state import CallState
 from app.engines.classifier import ClsResult, IntentClassifier
 from app.engines.compliance import ComplianceEngine
 from app.engines.prompt_builder import build_messages
-from app.engines.route_engine import match_route
+from app.engines.route_engine import explain_route_miss, match_route
 from app.knowledge.seed import (DNC_PHRASES, FREEFORM_COMPONENTS,
                                 FREEFORM_STRATEGY, TERMINAL_END,
                                 TERMINAL_TRANSFER)
@@ -260,9 +260,12 @@ class DialogOrchestrator:
             _slot_changes(slots_before, state.slots), _preview(state.last_fragment),
         )
         if route is None:
+            miss = explain_route_miss(snap, node_before, cls, state.slots)
             logger.info(
-                "dialog route miss call=%s node=%s intent=%s objection=%s slots=%s",
-                state.call_id, node_before, cls.intent, cls.objection, dict(state.slots),
+                "dialog route miss call=%s node=%s intent=%s objection=%s conf=%.3f "
+                "slots=%s miss=%s",
+                state.call_id, node_before, cls.intent, cls.objection, cls.confidence,
+                dict(state.slots), miss,
             )
         else:
             logger.info(

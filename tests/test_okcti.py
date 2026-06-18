@@ -114,6 +114,22 @@ def test_okcti_synthetic_asr_placeholder_stays_at_node():
         assert state2["current_node"] == "N007"
 
 
+def test_okcti_no_input_usrtype_with_real_text_still_routes():
+    """部分平台会在 usrtype=8/9 时仍带真实 ASR 文本，应按真实输入进入策略路由。"""
+    with _client() as client:
+        client.post("/ivr/okcti/welcome/stream", json=_payload("OKCTI_REAL_9", "START"))
+        payload = _payload("OKCTI_REAL_9", "QA", "是我，什么事")
+        payload["usrtype"] = 9
+
+        resp = client.post("/ivr/okcti/welcome/stream", json=payload)
+
+        assert resp.status_code == 200
+        assert "橘子分期" in resp.text
+        state = client.get("/api/v1/calls/OKCTI_REAL_9/state").json()
+        assert state["current_node"] == "N007"
+        assert state["slots"].get("identity_confirmed") is True
+
+
 def test_okcti_n005_recovery_when_user_clarifies_identity():
     """N005 误判恢复：进入"非本人"节点后用户说"我就是本人"，应回到事项告知而非结束。"""
     with _client() as client:

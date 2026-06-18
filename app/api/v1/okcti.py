@@ -354,8 +354,6 @@ _SYNTHETIC_ASR_HINTS = (
 
 def _user_text(req: OkctiRequest) -> str:
     """从 OKCTI 请求中提取真实用户话语；占位符 / 无回应 / ASR 异常一律返回 ''."""
-    if req.usrtype in _NO_REAL_INPUT_USRTYPES:
-        return ""
     content = (req.usrcontent or "").strip()
     if not content:
         return ""
@@ -363,6 +361,11 @@ def _user_text(req: OkctiRequest) -> str:
         logger.info("okcti synthetic asr placeholder ignored call=%s content=%r",
                     req.callid, _preview(content))
         return ""
+    if req.usrtype in _NO_REAL_INPUT_USRTYPES:
+        logger.info(
+            "okcti usrtype_has_real_content call=%s usrtype=%s content=%r",
+            req.callid, req.usrtype, _preview(content),
+        )
     return content
 
 
@@ -474,9 +477,9 @@ async def _event_stream(req: OkctiRequest, calls, orchestrator, qa,
         bool(req.usrrecurl), req.talktimelong,
     )
     status = "ok"
-    # 无 ASR 输入的事件（usrtype=7/8/9，或 usrcontent 为空）每次都需推进静音计数，
-    # 不能被幂等缓存短路；只对有内容的真实回合启用 dedup。
-    can_dedup = bool((req.usrcontent or "").strip()) and req.usrtype not in (7, 8, 9)
+    # 无 ASR 输入的事件每次都需推进静音计数，不能被幂等缓存短路；
+    # 部分平台会在 usrtype=8/9 时仍携带真实文本，这类内容应按真实回合处理。
+    can_dedup = bool(_user_text(req))
     try:
         cached = _cached_response(state, request_key) if can_dedup else None
         if cached is not None:
